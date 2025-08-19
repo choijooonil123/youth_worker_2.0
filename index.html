@@ -15,7 +15,6 @@
     
     .wrap{max-width:1200px;margin:0 auto;padding:10px 16px 40px}
     .panel{border:1px solid #263062;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,0));box-shadow:0 10px 40px rgba(0,0,0,.35)}
-
     .toolbar{display:flex;gap:10px;align-items:center;padding:14px;border-bottom:1px solid #283162;flex-wrap:wrap}
     .toolbar .btn{border:1px solid #2b3769;background:#16214a;color:var(--ink);padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:700}
     .toolbar .btn:hover{background:#1a2a56}
@@ -24,7 +23,7 @@
     .counts{display:flex;gap:12px;align-items:center}
     .counts .pill{border-color:#2b3769}
 
-    /* 질문 리스트 간격 더 줄임 */
+    /* 질문 리스트 간격 축소 */
     .grid{display:grid;gap:6px;padding:10px;grid-template-columns:1fr}
     .qbtn{display:block;width:100%;text-align:left;background:#0f1633;border:1px solid #1f2a5a;border-radius:12px;color:var(--ink);padding:8px 10px;margin:2px 0;cursor:pointer;font-size:14px;line-height:1.28}
     .qbtn:hover{background:#121b3e}
@@ -43,13 +42,13 @@
     /* 로그인 박스 컴팩트 */
     .login-card{width:min(420px,92vw);margin:0 auto}
 
-    /* 긴 추가설명도 보기 좋게 */
+    /* 긴 추가설명 보기 */
     #extraInfo { max-height:50vh; overflow:auto; resize:vertical; }
 
     .score{font-size:36px;font-weight:800}
   </style>
 
-  <!-- Firestore SDK 모듈 로드 & 초기화 -->
+  <!-- Firebase Firestore SDK (ESM) -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
     import {
@@ -57,7 +56,7 @@
       deleteDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
-    // 🔑 Firebase 콘솔에서 발급받은 설정으로 교체하세요
+    /* 🔑 Firebase 콘솔 설정으로 교체하세요 */
     const firebaseConfig = {
       apiKey: "YOUR_API_KEY",
       authDomain: "YOUR_PROJECT.firebaseapp.com",
@@ -70,7 +69,6 @@
     const app = initializeApp(firebaseConfig);
     const db  = getFirestore(app);
 
-    // 전역 노출
     window.__fb = {
       db,
       colShared : () => collection(db, "sharedData"),
@@ -159,9 +157,9 @@
   </dialog>
 
   <script>
-    /* ================= 기본 유틸/상태 ================= */
-    let raw = [];        // 전체 문항(기본 + 공유 병합)
-    let data = [];       // 표시용(미습득만)
+    /* =============== 상태/유틸 =============== */
+    let raw = [];        // 전체 문항
+    let data = [];       // 미습득만 표시
     let currentUser = null;
     let currentIdx = null;
     let recognition = null;
@@ -172,56 +170,81 @@
     }[m]));
     const qKey = q => `${normSubj(q.subject)}::${q.question}`;
 
-    /* ================= Firestore 저장소 래퍼 ================= */
+    /* =============== Firestore 래퍼(오류 안전) =============== */
     async function loadShared(){
-      const { getDocs } = window.__fb_api;
-      const snap = await getDocs(window.__fb.colShared());
-      const arr = [];
-      snap.forEach(d => arr.push(d.data()));
-      return arr;
+      try{
+        const { getDocs } = window.__fb_api;
+        const snap = await getDocs(window.__fb.colShared());
+        const arr = []; snap.forEach(d => arr.push(d.data()));
+        return arr;
+      }catch(e){
+        console.error('[loadShared] 실패:', e);
+        return [];
+      }
     }
     async function saveShared(array){
-      const { writeBatch, doc } = window.__fb_api;
-      const db = window.__fb.db;
-      const batch = writeBatch(db);
-      array.forEach(rec=>{
-        const id = `${normSubj(rec.subject)}::${rec.question}`;
-        batch.set(doc(db, "sharedData", id), rec, { merge:true });
-      });
-      await batch.commit();
+      try{
+        const { writeBatch, doc } = window.__fb_api;
+        const db = window.__fb.db;
+        const batch = writeBatch(db);
+        array.forEach(rec=>{
+          const id = `${normSubj(rec.subject)}::${rec.question}`;
+          batch.set(doc(db, "sharedData", id), rec, { merge:true });
+        });
+        await batch.commit();
+      }catch(e){
+        console.error('[saveShared] 실패:', e);
+      }
     }
     async function persistQuestion(q){
-      const { setDoc, doc } = window.__fb_api;
-      const db = window.__fb.db;
-      const id = qKey(q);
-      const rec = {
-        subject:q.subject, question:q.question,
-        answers:q.answers||[], active:q.active||0,
-        extraInfo:q.extraInfo||'', followups:q.followups||[]
-      };
-      await setDoc(doc(db,"sharedData",id), rec, { merge:true });
+      try{
+        const { setDoc, doc } = window.__fb_api;
+        const db = window.__fb.db;
+        const id = qKey(q);
+        const rec = {
+          subject:q.subject, question:q.question,
+          answers:q.answers||[], active:q.active||0,
+          extraInfo:q.extraInfo||'', followups:q.followups||[]
+        };
+        await setDoc(doc(db,"sharedData",id), rec, { merge:true });
+      }catch(e){
+        console.error('[persistQuestion] 실패:', e);
+      }
     }
     async function deleteSharedQuestion(q){
-      const { deleteDoc, doc } = window.__fb_api;
-      const db = window.__fb.db;
-      await deleteDoc(doc(db, "sharedData", qKey(q)));
+      try{
+        const { deleteDoc, doc } = window.__fb_api;
+        const db = window.__fb.db;
+        await deleteDoc(doc(db, "sharedData", qKey(q)));
+      }catch(e){
+        console.error('[deleteSharedQuestion] 실패:', e);
+      }
     }
-
-    // 진행(랭킹/개인)
     async function loadProgress(){
-      const { getDocs } = window.__fb_api;
-      const snap = await getDocs(window.__fb.colProgress());
-      const obj = {};
-      snap.forEach(d => { obj[d.id] = d.data(); });
-      return obj; // { username: { learnedIds: [...] } }
+      try{
+        const { getDocs } = window.__fb_api;
+        const snap = await getDocs(window.__fb.colProgress());
+        const obj = {}; snap.forEach(d => { obj[d.id] = d.data(); });
+        return obj;
+      }catch(e){
+        console.error('[loadProgress] 실패:', e);
+        return {};
+      }
     }
     async function saveProgressForUser(username, learnedIds){
-      const { setDoc, doc } = window.__fb_api;
-      const db = window.__fb.db;
-      await setDoc(doc(db, "progress", username), { learnedIds: Array.from(new Set(learnedIds)) }, { merge:true });
+      try{
+        const { setDoc, doc } = window.__fb_api;
+        const db = window.__fb.db;
+        await setDoc(doc(db, "progress", username),
+          { learnedIds: Array.from(new Set(learnedIds)) },
+          { merge:true }
+        );
+      }catch(e){
+        console.error('[saveProgressForUser] 실패:', e);
+      }
     }
 
-    /* ================= 순위/헤더 ================= */
+    /* =============== 순위/헤더 =============== */
     async function renderRanks(){
       const p = await loadProgress();
       const rows = Object.keys(p).map(u=>({u, c:(p[u]?.learnedIds||[]).length}))
@@ -244,7 +267,7 @@
       rankEl.style.display='inline-block'; userEl.style.display='inline-block'; lo.style.display='inline-block';
     }
 
-    /* ================= 베이스 데이터 로드/병합 ================= */
+    /* =============== 베이스 데이터 로드/병합 =============== */
     const FALLBACK = [
       { subject:'샘플과목', question:'청소년상담에서 라포의 핵심은?', answer:'진정성, 공감, 존중을 통해 신뢰관계를 형성' },
       { subject:'샘플과목', question:'청소년 정책의 3대 축은?', answer:'보호, 참여, 발달' }
@@ -286,8 +309,6 @@
       raw=Array.from(map.values()).map((q,i)=>({...q,_idx:i}));
       await seedAllAugmentationsThenPersist();
     }
-
-    // 추가설명/추가질문 자동 시드(비어 있으면만)
     function makeSeedExtraInfo(q){
       return `● 질문의 의도: “${q.question}”에 대한 개념 이해와 현장 적용 능력 평가
 ● 답변 틀: (정의) → (핵심요소 3가지) → (사례/근거) → (한계·보완/윤리)
@@ -310,14 +331,13 @@
         }
         if(!entry.extraInfo){ entry.extraInfo = makeSeedExtraInfo(q); changed=true; }
         if(!Array.isArray(entry.followups) || entry.followups.length===0){ entry.followups = makeSeedFollowups(q); changed=true; }
-        // 메모리 반영
         q.extraInfo = entry.extraInfo;
         q.followups = entry.followups.slice();
         if(changed){ await persistQuestion(q); }
       }
     }
 
-    /* ================= 사용자 필터/카운트 ================= */
+    /* =============== 사용자 필터/카운트 =============== */
     async function applyLearnedFilterForCurrentUser(){
       const p = await loadProgress();
       const learned = currentUser ? new Set((p[currentUser]?.learnedIds)||[]) : new Set();
@@ -330,7 +350,7 @@
       document.getElementById('countLearned').textContent = `습득수: ${learnedCnt}`;
     }
 
-    /* ================= 과목/리스트 ================= */
+    /* =============== 과목/리스트 =============== */
     function subjects(){ return Array.from(new Set(raw.map(x=>normSubj(x.subject)))).sort(); }
     function initSubjectSelect(){
       const sel=document.getElementById('subjectSelect');
@@ -347,24 +367,35 @@
       grid.innerHTML=list || `<div style="padding:12px;opacity:.7">이 과목의 남은 문항이 없습니다.</div>`;
     }
 
-    /* ================= 로그인/로그아웃/초기화 ================= */
+    /* =============== 로그인/로그아웃/초기화 =============== */
     document.getElementById('loginBtn').onclick = async ()=>{
       const name=document.getElementById('username').value.trim();
       const pass=document.getElementById('password').value;
       if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
       currentUser=name;
-      const all = await loadProgress();
-      if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
+
+      // Firestore 실패해도 화면 전환은 진행
+      try{
+        const all = await loadProgress();
+        if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
+      }catch(e){
+        console.warn('[login] 진행도 초기화 오류 – 오프라인 모드:', e);
+      }
+
       document.getElementById('loginPanel').style.display='none';
       document.getElementById('mainPanel').style.display='block';
-      await bootstrap();
+
+      try{ await bootstrap(); }
+      catch(e){ console.error('[bootstrap] 실패 – 최소 렌더:', e); }
     };
+
     document.getElementById('logoutBtn').onclick = async ()=>{
       currentUser=null;
       document.getElementById('mainPanel').style.display='none';
       document.getElementById('loginPanel').style.display='block';
       await renderRanks(); await updateHeaderUser();
     };
+
     document.getElementById('resetProgress').onclick = async ()=>{
       if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
       await saveProgressForUser(currentUser, []);
@@ -375,7 +406,7 @@
       await updateHeaderUser();
     };
 
-    /* ================= 질문 모달 ================= */
+    /* =============== 질문 모달 =============== */
     function openQuestion(idx){
       currentIdx=idx;
       const q=raw.find(x=>x._idx===idx); if(!q) return;
@@ -392,7 +423,7 @@
     window.openQuestion = openQuestion;
     document.getElementById('closeBtn').onclick = closeQuestion;
 
-    /* ================= 음성 합성/인식 ================= */
+    /* =============== 음성 합성/인식 =============== */
     function speak(txt){ const u=new SpeechSynthesisUtterance(txt); u.lang='ko-KR'; speechSynthesis.cancel(); speechSynthesis.speak(u); }
     document.getElementById('speakBtn').onclick = ()=>{ const q=raw.find(x=>x._idx===currentIdx); if(q) speak(q.question); };
     function startRecognition(){
@@ -416,7 +447,7 @@
       startRecognition();
     };
 
-    /* ================= 유사도 & 답변완료 ================= */
+    /* =============== 유사도 & 답변완료 =============== */
     function similarity(a,b){
       const sa=new Set(String(a).split(/\s+/).filter(Boolean));
       const sb=new Set(String(b).split(/\s+/).filter(Boolean));
@@ -432,7 +463,7 @@
       speak('정답입니다. ' + gold);
     };
 
-    /* ================= 습득완료 ================= */
+    /* =============== 습득완료 =============== */
     document.getElementById('learnedBtn').onclick = async ()=>{
       if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
       const q=raw.find(x=>x._idx===currentIdx); if(!q) return;
@@ -448,7 +479,7 @@
       await updateHeaderUser();
     };
 
-    /* ================= 정답/추가설명/추가질문 관리 ================= */
+    /* =============== 정답/추가설명/추가질문 관리 =============== */
     function renderAnswerList(){
       const holder=document.getElementById('extraAnswers');
       const q=raw.find(x=>x._idx===currentIdx); if(!q){ holder.innerHTML=''; return; }
@@ -522,16 +553,13 @@
       renderFollowups();
     };
 
-    /* ================= 질문 추가/삭제(공유) ================= */
+    /* =============== 질문 추가/삭제(공유) =============== */
     document.getElementById('addQuestionBtn').onclick = async ()=>{
       const subj=prompt('과목명을 입력하세요'); if(!subj) return;
       const ques=prompt('새 질문을 입력하세요'); if(!ques) return;
       const answ=prompt('정답(모범답안)을 입력하세요'); if(!answ) return;
-
-      // 중복 체크
       const id = `${normSubj(subj)}::${ques}`;
       if(raw.some(x=> qKey(x)===id)){ alert('이미 존재하는 문항입니다.'); return; }
-
       const seed = {
         subject:normSubj(subj), question:ques,
         answers:[answ], active:0,
@@ -541,16 +569,14 @@
       await saveShared([seed]);
       await bootstrap();
     };
-
     document.getElementById('deleteQuestionBtn').onclick = async ()=>{
       const q=raw.find(x=>x._idx===currentIdx); if(!q) return;
-      if(!confirm('이 질문을 모든 사용자에게서 삭제하시겠습니까? (기본 JSON 문항은 삭제 불가)')) return;
-      // 공유로 존재하면 삭제
+      if(!confirm('이 질문을 모든 사용자에게서 삭제하시겠습니까?')) return;
       await deleteSharedQuestion(q);
       await bootstrap();
     };
 
-    /* ================= 추가설명 전체보기 토글 ================= */
+    /* =============== 추가설명 전체보기 토글 =============== */
     (function(){
       const btn = document.getElementById('expandExtraInfoBtn');
       if(!btn) return;
@@ -571,7 +597,7 @@
       });
     })();
 
-    /* ================= 내보내기/가져오기 ================= */
+    /* =============== 내보내기/가져오기 =============== */
     (function(){
       const exportBtn = document.getElementById('exportBtn');
       const importBtn = document.getElementById('importBtn');
@@ -589,11 +615,7 @@
       async function exportAll(){
         const shared = await loadShared();
         const progress = await loadProgress();
-        const payload = {
-          version: 2,
-          exportedAt: new Date().toISOString(),
-          shared, progress
-        };
+        const payload = { version: 2, exportedAt: new Date().toISOString(), shared, progress };
         download('youth-interview-backup.json', JSON.stringify(payload,null,2));
         alert('내보내기가 완료되었습니다.');
       }
@@ -608,10 +630,7 @@
           if(typeof obj.progress !== 'object') throw new Error('progress는 객체여야 합니다.');
           if(!confirm('현재 Firestore 데이터가 덮어쓰기/병합됩니다. 진행할까요?')) return;
 
-          // shared -> set merge
           await saveShared(obj.shared);
-
-          // progress -> 사용자별 저장
           const names = Object.keys(obj.progress||{});
           for(const name of names){
             const learned = Array.from(new Set((obj.progress[name]?.learnedIds)||[]));
@@ -637,7 +656,7 @@
       }
     })();
 
-    /* ================= 부트스트랩 ================= */
+    /* =============== 부트스트랩 =============== */
     async function bootstrap(){
       const base=await loadBase();
       const std = standardize(base);
@@ -650,7 +669,7 @@
       await updateHeaderUser();
     }
 
-    // 초기: 순위만 표시
+    // 초기: 순위만 먼저
     renderRanks();
   </script>
 </body>
