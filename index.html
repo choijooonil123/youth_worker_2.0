@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <title>청소년지도사 면접 대비</title>
+  <style>
+    body { font-family: sans-serif; background:#f6f8fa; margin:0; padding:20px; }
+    h1 { text-align:center; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:15px; margin-top:20px; }
+    .col { background:#fff; border:1px solid #ccc; border-radius:10px; padding:10px; }
+    .question-btn { display:block; width:100%; padding:10px; margin:5px 0; border:none;
+                    border-radius:6px; background:#1976d2; color:#fff; cursor:pointer; }
+    .question-btn:hover { background:#125ea6; }
+    .controls button { margin:5px; padding:10px; }
+    .answer-box { background:#eee; padding:10px; border-radius:6px; white-space:pre-line; }
+  </style>
+</head>
+<body>
+  <h1>청소년지도사 면접 연습 시스템</h1>
+  <p>문제를 선택하면 질문이 음성과 화면에 표시됩니다.<br>
+     답변을 녹음 → 제출하면 정답과 비교한 유사도를 보여줍니다.<br>
+     "습득완료"를 누르면 해당 문제는 목록에서 제거됩니다. (최대 3회 연습 가능)</p>
+
+  <div id="grid" class="grid"></div>
+
+  <!-- Modal -->
+  <div id="modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+                         background:rgba(0,0,0,0.6);">
+    <div style="background:#fff; margin:50px auto; padding:20px; border-radius:10px; max-width:600px;">
+      <h2 id="qText"></h2>
+      <div class="controls">
+        <button id="speakBtn">🔊 질문 다시듣기</button>
+        <button id="recordBtn">🎤 답변녹음</button>
+        <button id="submitBtn" disabled>✅ 답변제출</button>
+        <button id="learnedBtn">📌 습득완료</button>
+        <button onclick="closeModal()">❌ 닫기</button>
+      </div>
+      <div id="userAnswer" class="answer-box"></div>
+      <div id="result"></div>
+    </div>
+  </div>
+
+  <script>
+  let data = [];
+  let practiceCount = 0;
+  let currentQ = null;
+  let mediaRecorder, audioChunks = [];
+
+  // 데이터 불러오기
+  fetch("youth_quiz_data.json")
+    .then(r=>r.json())
+    .then(json=>{
+      data = json;
+      renderGrid();
+    });
+
+  function renderGrid() {
+    const grid = document.getElementById("grid");
+    grid.innerHTML = "";
+    data.forEach((item,idx)=>{
+      const col = document.createElement("div");
+      col.className="col";
+      col.innerHTML = `<button class='question-btn' onclick='openModal(${idx})'>${item.question}</button>`;
+      grid.appendChild(col);
+    });
+  }
+
+  function openModal(idx) {
+    if(practiceCount>=3){ alert("3회 연습 완료!"); return; }
+    currentQ = idx;
+    document.getElementById("qText").innerText = data[idx].question;
+    document.getElementById("userAnswer").innerText = "";
+    document.getElementById("result").innerHTML = "";
+    document.getElementById("modal").style.display="block";
+    speak(data[idx].question);
+  }
+  function closeModal(){ document.getElementById("modal").style.display="none"; }
+
+  function speak(text){
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang="ko-KR";
+    speechSynthesis.speak(utter);
+  }
+
+  document.getElementById("speakBtn").onclick = ()=>speak(data[currentQ].question);
+
+  // 녹음 시작
+  document.getElementById("recordBtn").onclick = async ()=>{
+    let stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks=[];
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.onstop = async ()=>{
+      const blob = new Blob(audioChunks);
+      const text = "(실제 구현시 SpeechRecognition API 사용)"; 
+      document.getElementById("userAnswer").innerText = text;
+      document.getElementById("submitBtn").disabled=false;
+    };
+    mediaRecorder.start();
+    setTimeout(()=>{ mediaRecorder.stop(); }, 5000); // 5초 녹음
+  };
+
+  // 답변 제출
+  document.getElementById("submitBtn").onclick = ()=>{
+    const userAns = document.getElementById("userAnswer").innerText;
+    const correct = data[currentQ].answer;
+    const sim = similarity(userAns, correct);
+    document.getElementById("result").innerHTML =
+      `<p>✅ 정답: ${correct}</p><p>🔎 유사도: ${(sim*100).toFixed(1)}%</p>`;
+    practiceCount++;
+  };
+
+  // 습득완료
+  document.getElementById("learnedBtn").onclick = ()=>{
+    data.splice(currentQ,1);
+    closeModal();
+    renderGrid();
+  };
+
+  // 간단한 유사도 계산 (Jaccard)
+  function similarity(a,b){
+    const sa = new Set(a.split(\" \")), sb = new Set(b.split(\" \"));
+    let inter = 0; sa.forEach(w=>{ if(sb.has(w)) inter++; });
+    return inter / (sa.size + sb.size - inter || 1);
+  }
+  </script>
+</body>
+</html>
