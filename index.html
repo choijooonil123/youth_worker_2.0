@@ -370,19 +370,27 @@
 
     /* =============== 로그인/로그아웃/초기화 =============== */
     document.getElementById('loginBtn').onclick = async ()=>{
-      const name=document.getElementById('username').value.trim();
-      const pass=document.getElementById('password').value;
-      if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
-      currentUser=name;
+  const name=document.getElementById('username').value.trim();
+  const pass=document.getElementById('password').value;
+  if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
+  currentUser=name;
 
-      // Firestore 실패해도 화면 전환은 진행
-      try{
-        const all = await loadProgress();
-        if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
-      }catch(e){
-        console.warn('[login] 진행도 초기화 오류 – 오프라인 모드:', e);
-      }
+  // (있어도 되고 없어도 됨) 진행도 초기 문서 생성 시도 – 실패해도 계속
+  try{
+    const all = await loadProgress();
+    if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
+  }catch(e){ console.warn('[login] 진행도 초기화 오류 – 계속 진행', e); }
 
+  // 화면 전환
+  document.getElementById('loginPanel').style.display='none';
+  document.getElementById('mainPanel').style.display='block';
+
+  // ✅ 1단계: 기본 JSON으로 즉시 렌더(과목/질문 즉시 보이게)
+  try { await quickRenderBase(); } catch(e){ console.warn('quickRenderBase 실패', e); }
+
+  // ✅ 2단계: Firestore 공유 데이터 병합으로 최신화(배경 업데이트)
+  try { await bootstrap(); } catch(e){ console.error('[bootstrap] 실패', e); }
+};
       document.getElementById('loginPanel').style.display='none';
       document.getElementById('mainPanel').style.display='block';
 
@@ -470,36 +478,47 @@
 
   const q = raw.find(x=>x._idx===currentIdx);
   if(!q) return;
-  const id = qKey(q);
+  const id = (q.subject && q.question) ? `${(q.subject||'').trim()}::${q.question}` : null;
+  if(!id) return;
 
-  // ① 즉시 UI에서 제거(낙관적 업데이트)
-  data = data.filter(item => qKey(item) !== id);
+  // ① 즉시 UI 반영(낙관적 업데이트): 목록에서 제거
+  data = data.filter(item => `${(item.subject||'').trim()}::${item.question}` !== id);
   renderBySubject(currentSubject());
 
-  // ② "습득수" 카운트도 즉시 +1 반영
-  const el = document.getElementById('countLearned');
-  const m = el && el.textContent.match(/\d+/);
-  if(m){ el.textContent = `습득수: ${Number(m[0]) + 1}`; }
+  // ② 즉시 카운트 반영
+  bumpPillNumber(document.getElementById('countLearned'), '습득수:');      // 하단 툴바
+  // 헤더(순위 · 습득수) 텍스트도 안전하게 증가
+  const rankEl = document.getElementById('headerRank');
+  if(rankEl){
+    const m = rankEl.textContent.match(/습득수:\s*(\d+)/);
+    const cur = m ? Number(m[1]) + 1 : 1;
+    // 순위 문구는 그대로, 습득수만 갱신
+    const newText = rankEl.textContent.replace(/습득수:\s*\d+/, `습득수: ${cur}`);
+    rankEl.textContent = newText.includes('습득수') ? newText : `${rankEl.textContent} · 습득수: ${cur}`;
+  }
 
   // ③ 모달 닫기
   closeQuestion();
 
   // ④ 서버(파이어스토어) 저장 시도 – 실패해도 UI는 유지
   try{
-    const all = await loadProgress();
-    const mine = new Set((all[currentUser]?.learnedIds || []));
+    const all = await loadProgress();                      // { username: { learnedIds: [...] } }
+    const mine = new Set((all[currentUser]?.learnedIds||[]));
     mine.add(id);
     await saveProgressForUser(currentUser, Array.from(mine));
   }catch(e){
     console.warn('[learned] 저장 실패 – UI는 유지됩니다:', e);
   }
 
-  // ⑤ 헤더/순위 최신화 (가능하면)
+  // ⑤ 화면 전역 동기화 (가능하면)
   try{
-    await renderRanks();
+    // 총수/습득수(툴바), 헤더(순위/습득수), 로그인화면 랭킹 테이블까지 갱신
+    await updateCounts();
     await updateHeaderUser();
-  }catch(e){ /* 무시 */ }
+    await renderRanks();
+  }catch(e){ /* 네트워크 오류는 무시 */ }
 };
+
     /* =============== 정답/추가설명/추가질문 관리 =============== */
     function renderAnswerList(){
       const holder=document.getElementById('extraAnswers');
