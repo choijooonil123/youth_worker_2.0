@@ -24,7 +24,6 @@
     .counts{display:flex;gap:12px;align-items:center}
     .counts .pill{border-color:#2b3769}
 
-    /* 질문 버튼 간격(좁게) */
     .grid{display:grid;gap:6px;padding:10px;grid-template-columns:1fr}
     .qbtn{display:block;width:100%;text-align:left;background:#0f1633;border:1px solid #1f2a5a;border-radius:12px;color:var(--ink);padding:8px 10px;margin:2px 0;cursor:pointer;font-size:14px;line-height:1.28}
     .qbtn:hover{background:#121b3e}
@@ -40,12 +39,8 @@
     .answer-box{background:#0b1330;border:1px solid #212c5c;border-radius:14px;padding:12px;min-height:56px;white-space:pre-wrap}
     textarea{width:100%;background:#0b1330;color:var(--ink);border:1px solid #212c5c;border-radius:14px;padding:8px;resize:vertical;min-height:80px}
 
-    /* 로그인 박스 컴팩트 */
     .login-card{width:min(420px,92vw);margin:0 auto}
-
-    /* 긴 추가설명 보기 */
     #extraInfo { max-height:50vh; overflow:auto; resize:vertical; }
-
     .score{font-size:36px;font-weight:800}
   </style>
 
@@ -57,17 +52,6 @@
       deleteDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
-    /* 🔑 반드시 교체: Firebase 콘솔에서 발급 받은 값 
-    const firebaseConfig = {
-      apiKey: "AIzaSyB8uvt7bkZokVkHT7nO0QRaB9WpEe2g2C4",
-      authDomain: "youth-worker.firebaseapp.com",
-      projectId: "youth-worker",
-      storageBucket: "youth-worker.firebasestorage.app",
-      messagingSenderId: "666890915384",
-      appId: "1:666890915384:web:90381989a786934648a0cd",
-      measurementId: "G-T1NCJXS15N"
-    };
-    */
     const firebaseConfig = {
       apiKey: "AIzaSyB8uvt7bkZokVkHT7nO0QRaB9WpEe2g2C4",
       authDomain: "youth-worker.firebaseapp.com",
@@ -95,7 +79,7 @@
     }
   </script>
 
-  <!-- 파이어베이스 실패 시 전역 폴백 (UI는 계속 동작) -->
+  <!-- 파이어베이스 실패 시 전역 폴백 -->
   <script>
     window.__cloudReady = window.__cloudReady || false;
     window.__fb       = window.__fb       || { db:null, colShared:()=>({}), colProgress:()=>({}) };
@@ -199,10 +183,22 @@
     const LS_PROG   = 'yj_progress_backup_v1';
 
     const normSubj = s => (s && String(s).trim()) ? String(s).trim() : '기타';
-    const esc = s => String(s).replace(/[&<>"']/g, m => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
-    }[m]));
+    const esc = s => String(s).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
     const qKey = q => `${normSubj(q.subject)}::${q.question}`;
+
+    // ====== (요청사항용 유틸) 정답 태그 처리 ======
+    function ensureTagged(text, author){
+      const s = String(text||'').trim();
+      return /\s*<[^>]+>\s*$/.test(s) ? s : `${s} <${author}>`;
+    }
+    function stripAuthorTag(s){
+      return String(s||'').replace(/\s*<[^>]+>\s*$/,'').trim();
+    }
+    function getAuthorFromAnswer(s){
+      const m = String(s||'').match(/<([^>]+)>\s*$/);
+      return m ? m[1] : '관리자';
+    }
+    function stopRecognition(){ try{ recognition && recognition.stop(); }catch{} recognition=null; }
 
     /* ================= 로컬 폴백 저장소 ================= */
     function lsGet(key, def){ try{ const v=localStorage.getItem(key); return v? JSON.parse(v): def; }catch{return def;} }
@@ -219,7 +215,7 @@
         return true;
       }catch(e){
         console.warn('[pingFirestore] Firestore unavailable (silent):', e?.code, e?.message);
-        box.textContent = ''; // 화면에 오류 표시 안 함
+        box.textContent = '';
         return false;
       }
     }
@@ -317,7 +313,7 @@
     /* ================= 순위/헤더 ================= */
     async function renderRanks(){
       const progress = await loadProgress();
-      const total = raw.length || 1; // 전체 문제 수
+      const total = raw.length || 1;
       const rows = Object.keys(progress).map(u=>{
         const learned = (progress[u]?.learnedIds || []).length;
         const rate = ((learned / total) * 100).toFixed(1);
@@ -373,15 +369,21 @@
         return Array.isArray(j)&&j.length? j : FALLBACK;
       }catch{ return FALLBACK; }
     }
+    // (요청사항 반영) 기본 answers에 <관리자> 태그 보장
     function standardize(base){
-      return base.map(x=>({
-        subject: normSubj(x.subject),
-        question: x.question,
-        answers: Array.isArray(x.answers)? x.answers.filter(Boolean) : [(x.answer||'')].filter(Boolean),
-        active: (typeof x.active==='number'? x.active:0),
-        extraInfo: (typeof x.extraInfo==='string')? x.extraInfo : '',
-        followups: Array.isArray(x.followups)? x.followups.filter(f=>f&&f.q&&f.a) : []
-      }));
+      return base.map(x=>{
+        const arr = Array.isArray(x.answers) && x.answers.length
+          ? x.answers.map(a => ensureTagged(a, '관리자'))
+          : (x.answer ? [ensureTagged(x.answer, '관리자')] : []);
+        return {
+          subject : normSubj(x.subject),
+          question: x.question,
+          answers : arr,
+          active  : (typeof x.active==='number'? x.active:0),
+          extraInfo: (typeof x.extraInfo==='string')? x.extraInfo : '',
+          followups: Array.isArray(x.followups)? x.followups.filter(f=>f&&f.q&&f.a) : []
+        };
+      });
     }
     async function mergeWithShared(baseStd){
       const map=new Map();
@@ -389,14 +391,18 @@
       const shared = await loadShared();
       shared.forEach(q=>{
         const id=qKey(q);
+        const sharedAns = (q.answers||[]).map(a => ensureTagged(a, '관리자'));
         if(map.has(id)){
           const cur=map.get(id);
-          cur.answers=[...new Set([...(cur.answers||[]), ...((q.answers||[]).filter(Boolean))])];
+          const baseAns = (cur.answers||[]).map(a => ensureTagged(a, '관리자'));
+          const merged = [...baseAns];
+          sharedAns.forEach(sa=>{ if(!merged.includes(sa)) merged.push(sa); });
+          cur.answers = merged;
           if(!cur.extraInfo && q.extraInfo) cur.extraInfo=q.extraInfo;
           const fu=Array.isArray(q.followups)? q.followups.filter(f=>f&&f.q&&f.a) : [];
           cur.followups=[...(cur.followups||[]), ...fu];
         }else{
-          map.set(id,{subject:normSubj(q.subject),question:q.question,answers:(q.answers||[]).filter(Boolean),active:(q.active||0),extraInfo:(q.extraInfo||''),followups:Array.isArray(q.followups)? q.followups.filter(f=>f&&f.q&&f.a):[]});
+          map.set(id,{subject:normSubj(q.subject),question:q.question,answers:sharedAns,active:(q.active||0),extraInfo:(q.extraInfo||''),followups:Array.isArray(q.followups)? q.followups.filter(f=>f&&f.q&&f.a):[]});
         }
       });
       raw=Array.from(map.values()).map((q,i)=>({...q,_idx:i}));
@@ -437,7 +443,6 @@
       data = raw.filter(q=> !learned.has(qKey(q))).map(q=>({...q}));
     }
 
-    /* ▶ 과목별 카운트(과목별 : 총문제수 / 과목별 : 습득수) */
     async function updateCounts(){
       const subj = currentSubject();
       const p = await loadProgress();
@@ -462,7 +467,6 @@
       sel.innerHTML=subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
       if(subs.length) sel.value=subs[0]; else sel.value='';
       sel.onchange = ()=>{ renderBySubject(currentSubject()); updateCounts(); };
-      // 초기 렌더/카운트
       renderBySubject(currentSubject());
       updateCounts();
     }
@@ -496,25 +500,18 @@
         if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
         currentUser=name;
 
-        // 화면 전환 먼저 (즉시 표시)
         document.getElementById('loginPanel').style.display='none';
         document.getElementById('mainPanel').style.display='block';
         document.getElementById('logoutBtn').style.display = 'inline-block';
         document.getElementById('grid').innerHTML = '<div style="opacity:.7;padding:12px">데이터 불러오는 중…</div>';
 
-        // 진행도 문서 보장 (실패해도 계속)
         try{
           const all = await loadProgress();
           if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
         }catch(e){ console.warn('[login] progress 준비 실패(무시)', e); }
 
-        // 1단계: 기본 JSON 즉시 렌더
         await quickRenderBase();
-
-        // 2단계: 공유데이터 병합 최신화
         await bootstrap();
-
-        // 최종 보정
         await renderRanks(); await updateHeaderUser();
       }catch(err){
         console.error('[login] 치명적 오류', err);
@@ -546,7 +543,6 @@
       const base = await loadBase();
       const std  = standardize(base);
       raw = std.map((q,i)=>({...q,_idx:i}));
-
       await applyLearnedFilterForCurrentUser();
 
       initSubjectSelect();
@@ -612,11 +608,15 @@
     }
     document.getElementById('submitBtn').onclick = ()=>{
       const q=raw.find(x=>x._idx===currentIdx); if(!q) return;
-      const gold=(q.answers&&q.answers.length)? (q.answers[q.active||0]||q.answers[0]) : '';
+      const goldRaw=(q.answers&&q.answers.length)? (q.answers[q.active||0]||q.answers[0]) : '';
+      const gold=stripAuthorTag(goldRaw); // 태그 제거 후 비교
       const user=document.getElementById('userAnswer').textContent;
       const sim=similarity(user,gold);
-      document.getElementById('result').innerHTML = `<div class='answer-box'>${esc(gold)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
-      speak('정답입니다. ' + gold);
+      document.getElementById('result').innerHTML = `<div class='answer-box'>${esc(goldRaw)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
+
+      // (요청사항) 답변완료 시 녹음/표시 기능 종료
+      stopRecognition();
+      try{ speechSynthesis.cancel(); }catch{}
     };
 
     /* ================= 습득완료 ================= */
@@ -625,13 +625,10 @@
       const q = raw.find(x=>x._idx===currentIdx); if(!q) return;
       const id = qKey(q);
 
-      // 즉시 UI에서 제거
       data = data.filter(item => qKey(item) !== id);
       renderBySubject(currentSubject());
-
       closeQuestion();
 
-      // 저장
       try{
         const all = await loadProgress();
         const mine = new Set((all[currentUser]?.learnedIds || []));
@@ -639,11 +636,10 @@
         await saveProgressForUser(currentUser, Array.from(mine));
       }catch(e){ console.warn('[learned] 저장 실패 – 로컬 유지', e); }
 
-      // 전역 갱신
       try{
-        await updateCounts();      // 과목별 카운트
-        await updateHeaderUser();  // 전체 기준 상단 줄(총문제수/내 습득수/습득율/순위)
-        await renderRanks();       // 첫 화면 순위(전체 대비 비율)
+        await updateCounts();
+        await updateHeaderUser();
+        await renderRanks();
       }catch(e){}
     };
 
@@ -651,14 +647,22 @@
     function renderAnswerList(){
       const holder=document.getElementById('extraAnswers');
       const q=raw.find(x=>x._idx===currentIdx); if(!q){ holder.innerHTML=''; return; }
+
       const items=(q.answers||[]).map((ans,i)=>{
+        const author = getAuthorFromAnswer(ans);
         const checked=(q.active||0)===i?'checked':'';
+        const mine = !!currentUser && author === currentUser;
         return `<div style="display:flex;gap:8px;align-items:flex-start;margin:6px 0">
           <input type="radio" name="ansPick" value="${i}" ${checked} style="margin-top:4px"/>
-          <div style="flex:1">${esc(ans)}</div>
-          <button class="btn danger" data-del-ans="${i}">🗑</button>
+          <div style="flex:1;white-space:pre-wrap">${esc(ans)}</div>
+          ${ mine
+            ? `<button class="btn" data-edit-ans="${i}">✏️ 편집</button>
+               <button class="btn danger" data-del-ans="${i}">🗑 삭제</button>`
+            : `<div class="pill" title="작성자만 편집/삭제 가능">작성자: ${esc(author)}</div>`
+          }
         </div>`;
       }).join('') || '<div style="opacity:.7">등록된 정답이 없습니다.</div>';
+
       holder.innerHTML = `<h3 style="margin:10px 0 6px">정답 목록</h3>` + items;
 
       holder.querySelectorAll('input[name="ansPick"]').forEach(r=>{
@@ -667,9 +671,26 @@
           await persistQuestion(q);
         });
       });
+      holder.querySelectorAll('[data-edit-ans]').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const i=parseInt(btn.getAttribute('data-edit-ans'),10);
+          const ans = q.answers[i];
+          const author = getAuthorFromAnswer(ans);
+          if(!currentUser || author!==currentUser){ alert('작성자만 편집할 수 있습니다.'); return; }
+          const baseText = stripAuthorTag(ans);
+          const val = prompt('정답(모범답안) 편집', baseText);
+          if(val===null) return;
+          q.answers[i] = ensureTagged(val.trim(), currentUser);
+          await persistQuestion(q);
+          renderAnswerList();
+        });
+      });
       holder.querySelectorAll('[data-del-ans]').forEach(btn=>{
         btn.addEventListener('click', async ()=>{
           const i=parseInt(btn.getAttribute('data-del-ans'),10);
+          const ans = q.answers[i];
+          const author = getAuthorFromAnswer(ans);
+          if(!currentUser || author!==currentUser){ alert('작성자만 삭제할 수 있습니다.'); return; }
           q.answers.splice(i,1);
           if((q.active||0)>=q.answers.length) q.active=Math.max(0,q.answers.length-1);
           await persistQuestion(q);
@@ -678,12 +699,16 @@
       });
     }
     document.getElementById('addAnswerBtn').onclick = async ()=>{
+      if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
       const q=raw.find(x=>x._idx===currentIdx); if(!q) return;
       const val=prompt('추가할 정답(변형)을 입력하세요'); if(!val) return;
       q.answers=q.answers||[];
-      if(!q.answers.includes(val)) q.answers.push(val);
-      q.active=q.answers.length-1;
-      await persistQuestion(q);
+      const withTag = ensureTagged(val.trim(), currentUser);
+      if(!q.answers.includes(withTag)){
+        q.answers.push(withTag);
+        q.active=q.answers.length-1;
+        await persistQuestion(q);
+      }
       renderAnswerList();
     };
     document.getElementById('saveExtraInfoBtn').onclick = async ()=>{
@@ -740,7 +765,7 @@
       if(raw.some(x=> qKey(x)===id)){ alert('이미 존재하는 문항입니다.'); return; }
       const seed = {
         subject:normSubj(subj), question:ques,
-        answers:[answ], active:0,
+        answers:[ensureTagged(answ, '관리자')], active:0,
         extraInfo: makeSeedExtraInfo({subject:subj,question:ques}),
         followups: makeSeedFollowups({subject:subj,question:ques})
       };
@@ -789,6 +814,13 @@
           if(typeof obj.progress !== 'object') throw new Error('progress는 객체여야 합니다.');
           if(!confirm('현재 데이터가 덮어쓰기/병합됩니다. 진행할까요?')) return;
 
+          // shared 내 answers도 태그 보정
+          obj.shared = obj.shared.map(rec=>{
+            const copy = {...rec};
+            copy.answers = (copy.answers||[]).map(a=>ensureTagged(a,'관리자'));
+            return copy;
+          });
+
           await saveShared(obj.shared);
           const names = Object.keys(obj.progress||{});
           for(const name of names){
@@ -820,6 +852,12 @@
       const base=await loadBase();
       const std = standardize(base);
       await mergeWithShared(std);
+
+      // 안전망: 모든 정답 문자열에 태그 보장
+      raw.forEach(q=>{
+        q.answers = (q.answers||[]).map(a => ensureTagged(a, '관리자'));
+      });
+
       await applyLearnedFilterForCurrentUser();
       initSubjectSelect();
       renderBySubject(currentSubject());
@@ -828,7 +866,7 @@
       await updateHeaderUser();
     }
 
-    // 초기: 순위 먼저 (로그인 전에도 전체 기준으로 보여줌)
+    // 초기: 순위 먼저
     renderRanks();
   </script>
 </body>
