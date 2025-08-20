@@ -324,13 +324,28 @@
 
     /* ================= 순위/헤더 ================= */
     async function renderRanks(){
-      const p = await loadProgress();
-      const rows = Object.keys(p).map(u=>({u, c:(p[u]?.learnedIds||[]).length}))
-        .sort((a,b)=>b.c-a.c).slice(0,50);
-      document.getElementById('rankList').innerHTML =
-        '<h3>학습자 순위</h3>' +
-        (rows.map((r,i)=>`<div>${i+1}위 ${esc(r.u)}</div>`).join('') || '<div style="opacity:.7">아직 데이터가 없습니다</div>');
+      const progress = await loadProgress();
+      const entries = Object.entries(progress).map(([user, obj])=>{
+        const learned = (obj.learnedIds||[]).length;
+        return { user, learned };
+      });
+    
+      // 총 문제 수
+      const total = raw.length || 1;
+    
+      // 습득수 기준으로 정렬
+      entries.sort((a,b)=> b.learned - a.learned);
+    
+      // 출력 HTML
+      const listHtml = entries.map((e,idx)=>{
+        const rate = ((e.learned/total)*100).toFixed(1);
+        return `<div>${idx+1}위 ${e.user} — 습득수: ${e.learned}, 습득율: ${rate}%</div>`;
+      }).join('');
+    
+      document.getElementById('rankList').innerHTML = 
+        `<h3>학습자 순위</h3>${listHtml}`;
     }
+
     async function updateHeaderUser(){
       const rankEl=document.getElementById('headerRank');
       const userEl=document.getElementById('headerUser');
