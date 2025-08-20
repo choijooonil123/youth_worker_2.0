@@ -186,6 +186,9 @@
     const esc = s => String(s).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
     const qKey = q => `${normSubj(q.subject)}::${q.question}`;
 
+    // 관리자 판별
+    function isAdminUser(name){ return String(name||'') === '관리자'; }
+
     // ====== (요청사항용 유틸) 정답 태그 처리 ======
     function ensureTagged(text, author){
       const s = String(text||'').trim();
@@ -228,7 +231,7 @@
           const { getDocs } = window.__fb_api;
           const snap = await getDocs(window.__fb.colShared());
           const arr = []; snap.forEach(d => arr.push(d.data()));
-          lsSet(LS_SHARED, arr); // 로컬 백업
+          lsSet(LS_SHARED, arr);
           return arr;
         }catch(e){
           console.warn('[loadShared] cloud fail -> local fallback', e);
@@ -237,7 +240,7 @@
       return lsGet(LS_SHARED, []);
     }
     async function saveShared(array){
-      lsSet(LS_SHARED, array); // 로컬 항상 유지
+      lsSet(LS_SHARED, array);
       if(window.__cloudReady){
         try{
           const { writeBatch, doc } = window.__fb_api;
@@ -310,11 +313,39 @@
       }
     }
 
+    /* ================= 관리자: 사용자 삭제 ================= */
+    async function deleteUser(username){
+      if(!isAdminUser(currentUser)){ alert('관리자만 삭제할 수 있습니다.'); return; }
+      if(isAdminUser(username)){ alert('관리자를 삭제할 수 없습니다.'); return; }
+      if(!confirm(`${username} 사용자를 삭제하시겠습니까?`)) return;
+
+      // 로컬 진행도 삭제
+      const prog = lsGet(LS_PROG,{});
+      delete prog[username];
+      lsSet(LS_PROG, prog);
+
+      // 클라우드 진행도 삭제
+      if(window.__cloudReady){
+        try{
+          const { deleteDoc, doc } = window.__fb_api;
+          const db = window.__fb.db;
+          await deleteDoc(doc(db,"progress",username));
+        }catch(e){ console.warn("cloud delete fail", e); }
+      }
+
+      await renderRanks();
+      await updateHeaderUser();
+    }
+
     /* ================= 순위/헤더 ================= */
     async function renderRanks(){
       const progress = await loadProgress();
+
+      // 첫 화면 순위 리스트에서만 관리자 숨김
+      const userKeys = Object.keys(progress).filter(u => !isAdminUser(u));
+
       const total = raw.length || 1;
-      const rows = Object.keys(progress).map(u=>{
+      const rows = userKeys.map(u=>{
         const learned = (progress[u]?.learnedIds || []).length;
         const rate = ((learned / total) * 100).toFixed(1);
         return { u, learned, rate };
@@ -322,7 +353,13 @@
 
       const html = '<h3>학습자 순위</h3>' + (
         rows.length
-          ? rows.map((r,i)=>`<div>${i+1}위 ${esc(r.u)} — 습득수: ${r.learned}, 습득율: ${r.rate}%</div>`).join('')
+          ? rows.map((r,i)=>
+              `<div>
+                 ${i+1}위 ${esc(r.u)} — 습득수: ${r.learned}, 습득율: ${r.rate}%
+                 ${ (isAdminUser(currentUser) && r.u !== currentUser)
+                    ? ` <button class="btn danger" onclick="deleteUser('${r.u}')">🗑 삭제</button>`
+                    : '' }
+               </div>`).join('')
           : '<div style="opacity:.7">아직 데이터가 없습니다</div>'
       );
       document.getElementById('rankList').innerHTML = html;
@@ -369,7 +406,7 @@
         return Array.isArray(j)&&j.length? j : FALLBACK;
       }catch{ return FALLBACK; }
     }
-    // (요청사항 반영) 기본 answers에 <관리자> 태그 보장
+    // 기본 answers에 <관리자> 태그 보장
     function standardize(base){
       return base.map(x=>{
         const arr = Array.isArray(x.answers) && x.answers.length
@@ -614,7 +651,7 @@
       const sim=similarity(user,gold);
       document.getElementById('result').innerHTML = `<div class='answer-box'>${esc(goldRaw)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
 
-      // (요청사항) 답변완료 시 녹음/표시 기능 종료
+      // 답변완료 시 녹음/표시 기능 종료
       stopRecognition();
       try{ speechSynthesis.cancel(); }catch{}
     };
@@ -822,6 +859,8 @@
           });
 
           await saveShared(obj.shared);
+
+          // ✅ 관리자 포함해서 모두 반영
           const names = Object.keys(obj.progress||{});
           for(const name of names){
             const learned = Array.from(new Set((obj.progress[name]?.learnedIds)||[]));
