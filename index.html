@@ -1,4 +1,4 @@
-<!doctype html>
+der<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8"/>
@@ -347,18 +347,16 @@
     }
 
     async function updateHeaderUser(){
-      const rankEl=document.getElementById('headerRank');
-      const userEl=document.getElementById('headerUser');
-      const lo=document.getElementById('logoutBtn');
-      if(!currentUser){ rankEl.style.display='none'; userEl.style.display='none'; lo.style.display='none'; return; }
-      const p = await loadProgress();
-      const my=(p[currentUser]?.learnedIds||[]).length;
-      const rows=Object.keys(p).map(u=>({u,c:(p[u]?.learnedIds||[]).length})).sort((a,b)=>b.c-a.c);
-      const idx=rows.findIndex(x=>x.u===currentUser);
-      rankEl.textContent=`순위: ${idx>=0? (idx+1)+'위':'-'} · 습득수: ${my}`;
-      userEl.textContent=`사용자: ${currentUser}`;
-      rankEl.style.display='inline-block'; userEl.style.display='inline-block'; lo.style.display='inline-block';
+      const progress = await loadProgress();
+      const learned = (progress[currentUser]?.learnedIds || []).length;
+      const total = raw.length || 1;
+      const rate = ((learned/total)*100).toFixed(1);
+    
+      document.getElementById('headerUser').style.display='inline-block';
+      document.getElementById('headerUser').textContent = 
+        `${currentUser} — 습득수: ${learned}, 습득율: ${rate}%`;
     }
+
 
     /* ================= 베이스 데이터 ================= */
     const FALLBACK = [
