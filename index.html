@@ -218,22 +218,24 @@ der<!doctype html>
 
     /* ================= Firestore 연결 진단 ================= */
     async function pingFirestore(){
-      const box = document.getElementById('envErr');
+    const box = document.getElementById('envErr');
+    // 화면에는 어떤 오류도 띄우지 않음(조용 모드), 콘솔에만 기록
+    try{
       if(!window.__cloudReady){
-        box.textContent = '클라우드 비활성화(로컬 모드) – firebaseConfig/서버 실행 확인';
+        box.textContent = ''; // 조용히
         return false;
       }
-      try{
-        const { getDocs } = window.__fb_api;
-        await getDocs(window.__fb.colShared());
-        box.textContent = ''; return true;
-      }catch(e){
-        console.error('[pingFirestore] 실패:', e);
-        box.textContent = 'Firestore 연결 실패 – 개발자도구 콘솔 확인';
-        return false;
-      }
+      const { getDocs } = window.__fb_api;
+      await getDocs(window.__fb.colShared());
+      box.textContent = '';
+      return true;
+    }catch(e){
+      console.warn('[pingFirestore] Firestore unavailable (silent):', e?.code, e?.message);
+      box.textContent = ''; // 조용히
+      return false;
     }
-    document.addEventListener('DOMContentLoaded', ()=>{ pingFirestore(); });
+  }
+  document.addEventListener('DOMContentLoaded', ()=>{ pingFirestore(); });
 
     /* ================= 데이터 로드/저장 (Cloud-First) ================= */
     async function loadShared(){
@@ -336,36 +338,53 @@ der<!doctype html>
     /* ================= 순위/헤더 ================= */
     async function renderRanks(){
       const progress = await loadProgress();
-      const entries = Object.entries(progress).map(([user, obj])=>{
-        const learned = (obj.learnedIds||[]).length;
-        return { user, learned };
-      });
     
-      // 총 문제 수
+      // 총 문제 수(전체)
       const total = raw.length || 1;
     
-      // 습득수 기준으로 정렬
-      entries.sort((a,b)=> b.learned - a.learned);
+      const rows = Object.keys(progress).map(u=>{
+        const learned = (progress[u]?.learnedIds || []).length;
+        const rate = ((learned / total) * 100).toFixed(1);
+        return { u, learned, rate };
+      }).sort((a,b)=> b.learned - a.learned);
     
-      // 출력 HTML
-      const listHtml = entries.map((e,idx)=>{
-        const rate = ((e.learned/total)*100).toFixed(1);
-        return `<div>${idx+1}위 ${e.user} — 습득수: ${e.learned}, 습득율: ${rate}%</div>`;
-      }).join('');
-    
-      document.getElementById('rankList').innerHTML = 
-        `<h3>학습자 순위</h3>${listHtml}`;
+      const html = '<h3>학습자 순위</h3>' + (
+        rows.length
+          ? rows.map((r,i)=>`<div>${i+1}위 ${esc(r.u)} — 습득수: ${r.learned}, 습득율: ${r.rate}%</div>`).join('')
+          : '<div style="opacity:.7">아직 데이터가 없습니다</div>'
+      );
+      document.getElementById('rankList').innerHTML = html;
     }
 
+
     async function updateHeaderUser(){
-      const progress = await loadProgress();
-      const learned = (progress[currentUser]?.learnedIds || []).length;
-      const total = raw.length || 1;
-      const rate = ((learned/total)*100).toFixed(1);
+      const rankEl = document.getElementById('headerRank');
+      const userEl = document.getElementById('headerUser');
+      const lo     = document.getElementById('logoutBtn');
     
-      document.getElementById('headerUser').style.display='inline-block';
-      document.getElementById('headerUser').textContent = 
-        `${currentUser} — 습득수: ${learned}, 습득율: ${rate}%`;
+      if(!currentUser){
+        rankEl.style.display='none';
+        userEl.style.display='none';
+        lo.style.display='none';
+        return;
+      }
+    
+      const progress = await loadProgress();
+      const myLearned = (progress[currentUser]?.learnedIds || []).length;
+      const total = raw.length || 1; // 전체 문제 수
+      const rate = ((myLearned / total) * 100).toFixed(1);
+    
+      // 내 순위(습득수 기준)
+      const rows = Object.keys(progress).map(u=>({ u, c:(progress[u]?.learnedIds||[]).length }))
+                                        .sort((a,b)=> b.c - a.c);
+      const idx = rows.findIndex(r=> r.u === currentUser);
+    
+      rankEl.textContent = `총문제수: ${total} · 습득수: ${myLearned} · 습득율: ${rate}% · 순위: ${idx>=0? (idx+1)+'위':'-'}`;
+      userEl.textContent = `사용자: ${currentUser}`;
+    
+      rankEl.style.display='inline-block';
+      userEl.style.display='inline-block';
+      lo.style.display    = 'inline-block'; // 항상 보이도록
     }
 
 
@@ -445,13 +464,24 @@ der<!doctype html>
       const learned = currentUser ? new Set((p[currentUser]?.learnedIds)||[]) : new Set();
       data = raw.filter(q=> !learned.has(qKey(q))).map(q=>({...q}));
     }
+    
     async function updateCounts(){
-      // 총수 = 전체 raw.length / 습득수 = 모든 과목 누적
+      const subj = currentSubject();
       const p = await loadProgress();
-      const learnedCnt = currentUser ? ((p[currentUser]?.learnedIds||[]).length) : 0;
-      document.getElementById('countTotal').textContent = `총수: ${raw.length}`;
-      document.getElementById('countLearned').textContent = `습득수: ${learnedCnt}`;
+      const learnedIds = new Set((p[currentUser]?.learnedIds || []));
+    
+      const subjectAll = raw.filter(q => normSubj(q.subject) === subj);
+      const subjectTotal = subjectAll.length;
+    
+      // 과목별 습득수 = 내 learnedIds 와 해당 과목 문항ID 교집합
+      const subjectLearned = subjectAll.reduce((acc,q)=>{
+        return acc + (learnedIds.has(`${normSubj(q.subject)}::${q.question}`) ? 1 : 0);
+      }, 0);
+    
+      document.getElementById('countTotal').textContent   = `과목별 : 총문제수 ${subjectTotal}`;
+      document.getElementById('countLearned').textContent = `과목별 : 습득수 ${subjectLearned}`;
     }
+
 
     /* ================= 과목/리스트 ================= */
     function subjects(){ return Array.from(new Set(raw.map(x=>normSubj(x.subject)))).sort(); }
@@ -460,8 +490,9 @@ der<!doctype html>
       const subs=subjects();
       sel.innerHTML=subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
       if(subs.length) sel.value=subs[0];
-      sel.onchange = ()=> renderBySubject(currentSubject());
+      sel.onchange = ()=>{ renderBySubject(currentSubject()); updateCounts(); };
     }
+    
     function currentSubject(){ const sel=document.getElementById('subjectSelect'); return sel&&sel.value?sel.value:(subjects()[0]||'기타'); }
     function renderBySubject(subj){
       const grid=document.getElementById('grid');
@@ -478,6 +509,10 @@ der<!doctype html>
         if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
         currentUser=name;
 
+
+        // ✅ 두 번째 화면에서 항상 보이도록 즉시 노출
+        document.getElementById('logoutBtn').style.display = 'inline-block';
+        
         // 화면 전환 먼저 (즉시 보이게)
         document.getElementById('loginPanel').style.display='none';
         document.getElementById('mainPanel').style.display='block';
