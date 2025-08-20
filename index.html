@@ -466,20 +466,40 @@
 
     /* =============== 습득완료 =============== */
     document.getElementById('learnedBtn').onclick = async ()=>{
-      if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
-      const q=raw.find(x=>x._idx===currentIdx); if(!q) return;
-      const all = await loadProgress();
-      const mine = new Set((all[currentUser]?.learnedIds||[]));
-      mine.add(qKey(q));
-      await saveProgressForUser(currentUser, Array.from(mine));
-      closeQuestion();
-      await applyLearnedFilterForCurrentUser();
-      renderBySubject(currentSubject());
-      await updateCounts();
-      await renderRanks();
-      await updateHeaderUser();
-    };
+  if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
 
+  const q = raw.find(x=>x._idx===currentIdx);
+  if(!q) return;
+  const id = qKey(q);
+
+  // ① 즉시 UI에서 제거(낙관적 업데이트)
+  data = data.filter(item => qKey(item) !== id);
+  renderBySubject(currentSubject());
+
+  // ② "습득수" 카운트도 즉시 +1 반영
+  const el = document.getElementById('countLearned');
+  const m = el && el.textContent.match(/\d+/);
+  if(m){ el.textContent = `습득수: ${Number(m[0]) + 1}`; }
+
+  // ③ 모달 닫기
+  closeQuestion();
+
+  // ④ 서버(파이어스토어) 저장 시도 – 실패해도 UI는 유지
+  try{
+    const all = await loadProgress();
+    const mine = new Set((all[currentUser]?.learnedIds || []));
+    mine.add(id);
+    await saveProgressForUser(currentUser, Array.from(mine));
+  }catch(e){
+    console.warn('[learned] 저장 실패 – UI는 유지됩니다:', e);
+  }
+
+  // ⑤ 헤더/순위 최신화 (가능하면)
+  try{
+    await renderRanks();
+    await updateHeaderUser();
+  }catch(e){ /* 무시 */ }
+};
     /* =============== 정답/추가설명/추가질문 관리 =============== */
     function renderAnswerList(){
       const holder=document.getElementById('extraAnswers');
