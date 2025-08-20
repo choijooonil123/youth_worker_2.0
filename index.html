@@ -56,15 +56,14 @@
       deleteDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
-    /* 🔑 Firebase 콘솔 설정으로 교체하세요 */
+    /* 🔑 Firebase 콘솔 설정 값으로 교체하세요 */
     const firebaseConfig = {
-      apiKey: "AIzaSyB8uvt7bkZokVkHT7nO0QRaB9WpEe2g2C4",
-      authDomain: "youth-worker.firebaseapp.com",
-      projectId: "youth-worker",
-      storageBucket: "youth-worker.firebasestorage.app",
-      messagingSenderId: "666890915384",
-      appId: "1:666890915384:web:2dbc2b4d35aa9e3948a0cd",
-      measurementId: "G-GT3X3E9VTB"
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
     };
 
     const app = initializeApp(firebaseConfig);
@@ -96,6 +95,7 @@
         <input id="username" placeholder="사용자 이름" style="padding:8px;border-radius:6px;border:1px solid #2b3769;background:#0f1633;color:var(--ink)">
         <input id="password" type="password" placeholder="비밀번호" style="padding:8px;border-radius:6px;border:1px solid #2b3769;background:#0f1633;color:var(--ink)">
         <button id="loginBtn" class="btn primary">로그인</button>
+        <div id="envErr" style="font-size:12px;color:#ffb3b3;min-height:18px"></div>
         <div id="rankList" style="margin-top:10px"></div>
       </div>
     </div>
@@ -170,6 +170,33 @@
       "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
     }[m]));
     const qKey = q => `${normSubj(q.subject)}::${q.question}`;
+
+    function bumpPillNumber(el, label){
+      if(!el) return;
+      const m = el.textContent.match(/\d+/);
+      const n = m ? Number(m[0]) + 1 : 1;
+      el.textContent = `${label} ${n}`;
+    }
+
+    /* =============== Firestore 연결 진단(로그인 화면 표시) =============== */
+    async function pingFirestore(){
+      const box = document.getElementById('envErr');
+      try{
+        if(!window.__fb || !window.__fb.db){
+          box.textContent = 'Firebase 초기화 실패: firebaseConfig/서버 실행 확인';
+          return false;
+        }
+        const { getDocs } = window.__fb_api;
+        await getDocs(window.__fb.colShared());
+        box.textContent = '';
+        return true;
+      }catch(e){
+        console.error('[pingFirestore] 실패:', e);
+        box.textContent = 'Firestore 연결 실패: 서버 실행/보안규칙/콘솔 설정 확인';
+        return false;
+      }
+    }
+    document.addEventListener('DOMContentLoaded', ()=>{ pingFirestore(); });
 
     /* =============== Firestore 래퍼(오류 안전) =============== */
     async function loadShared(){
@@ -370,32 +397,27 @@
 
     /* =============== 로그인/로그아웃/초기화 =============== */
     document.getElementById('loginBtn').onclick = async ()=>{
-  const name=document.getElementById('username').value.trim();
-  const pass=document.getElementById('password').value;
-  if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
-  currentUser=name;
+      const name=document.getElementById('username').value.trim();
+      const pass=document.getElementById('password').value;
+      if(!name||!pass){ alert('이름과 비밀번호를 입력하세요.'); return; }
+      currentUser=name;
 
-  // (있어도 되고 없어도 됨) 진행도 초기 문서 생성 시도 – 실패해도 계속
-  try{
-    const all = await loadProgress();
-    if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
-  }catch(e){ console.warn('[login] 진행도 초기화 오류 – 계속 진행', e); }
+      // 진행도 문서 준비(실패해도 계속)
+      try{
+        const all = await loadProgress();
+        if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
+      }catch(e){ console.warn('[login] 진행도 초기화 오류 – 계속 진행', e); }
 
-  // 화면 전환
-  document.getElementById('loginPanel').style.display='none';
-  document.getElementById('mainPanel').style.display='block';
-
-  // ✅ 1단계: 기본 JSON으로 즉시 렌더(과목/질문 즉시 보이게)
-  try { await quickRenderBase(); } catch(e){ console.warn('quickRenderBase 실패', e); }
-
-  // ✅ 2단계: Firestore 공유 데이터 병합으로 최신화(배경 업데이트)
-  try { await bootstrap(); } catch(e){ console.error('[bootstrap] 실패', e); }
-};
+      // 화면 전환
       document.getElementById('loginPanel').style.display='none';
       document.getElementById('mainPanel').style.display='block';
+      document.getElementById('grid').innerHTML = '<div style="opacity:.7;padding:12px">데이터 불러오는 중…</div>';
 
-      try{ await bootstrap(); }
-      catch(e){ console.error('[bootstrap] 실패 – 최소 렌더:', e); }
+      // 1단계: 기본 JSON으로 즉시 렌더
+      try { await quickRenderBase(); } catch(e){ console.warn('quickRenderBase 실패', e); }
+
+      // 2단계: 공유데이터 병합으로 최신화
+      try { await bootstrap(); } catch(e){ console.error('[bootstrap] 실패', e); }
     };
 
     document.getElementById('logoutBtn').onclick = async ()=>{
@@ -414,6 +436,19 @@
       await renderRanks();
       await updateHeaderUser();
     };
+
+    /* =============== 빠른 1단계 렌더 (즉시 표시) =============== */
+    async function quickRenderBase(){
+      const base = await loadBase();
+      const std  = standardize(base);
+      raw = std.map((q,i)=>({...q,_idx:i}));
+      await applyLearnedFilterForCurrentUser();
+      initSubjectSelect();
+      renderBySubject(currentSubject());
+      await updateCounts();
+      await renderRanks();
+      await updateHeaderUser();
+    }
 
     /* =============== 질문 모달 =============== */
     function openQuestion(idx){
@@ -472,52 +507,49 @@
       speak('정답입니다. ' + gold);
     };
 
-    /* =============== 습득완료 =============== */
+    /* =============== 습득완료 (낙관적 업데이트 + 전역 갱신) =============== */
     document.getElementById('learnedBtn').onclick = async ()=>{
-  if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
+      if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
 
-  const q = raw.find(x=>x._idx===currentIdx);
-  if(!q) return;
-  const id = (q.subject && q.question) ? `${(q.subject||'').trim()}::${q.question}` : null;
-  if(!id) return;
+      const q = raw.find(x=>x._idx===currentIdx);
+      if(!q) return;
+      const id = qKey(q);
 
-  // ① 즉시 UI 반영(낙관적 업데이트): 목록에서 제거
-  data = data.filter(item => `${(item.subject||'').trim()}::${item.question}` !== id);
-  renderBySubject(currentSubject());
+      // 즉시 UI에서 제거
+      data = data.filter(item => qKey(item) !== id);
+      renderBySubject(currentSubject());
 
-  // ② 즉시 카운트 반영
-  bumpPillNumber(document.getElementById('countLearned'), '습득수:');      // 하단 툴바
-  // 헤더(순위 · 습득수) 텍스트도 안전하게 증가
-  const rankEl = document.getElementById('headerRank');
-  if(rankEl){
-    const m = rankEl.textContent.match(/습득수:\s*(\d+)/);
-    const cur = m ? Number(m[1]) + 1 : 1;
-    // 순위 문구는 그대로, 습득수만 갱신
-    const newText = rankEl.textContent.replace(/습득수:\s*\d+/, `습득수: ${cur}`);
-    rankEl.textContent = newText.includes('습득수') ? newText : `${rankEl.textContent} · 습득수: ${cur}`;
-  }
+      // 툴바 습득수 즉시 +1
+      bumpPillNumber(document.getElementById('countLearned'), '습득수:');
 
-  // ③ 모달 닫기
-  closeQuestion();
+      // 헤더 습득수도 +1
+      const rankEl = document.getElementById('headerRank');
+      if(rankEl){
+        const m = rankEl.textContent.match(/습득수:\s*(\d+)/);
+        const cur = m ? Number(m[1]) + 1 : 1;
+        const newText = rankEl.textContent.replace(/습득수:\s*\d+/, `습득수: ${cur}`);
+        rankEl.textContent = newText.includes('습득수') ? newText : `${rankEl.textContent} · 습득수: ${cur}`;
+      }
 
-  // ④ 서버(파이어스토어) 저장 시도 – 실패해도 UI는 유지
-  try{
-    const all = await loadProgress();                      // { username: { learnedIds: [...] } }
-    const mine = new Set((all[currentUser]?.learnedIds||[]));
-    mine.add(id);
-    await saveProgressForUser(currentUser, Array.from(mine));
-  }catch(e){
-    console.warn('[learned] 저장 실패 – UI는 유지됩니다:', e);
-  }
+      closeQuestion();
 
-  // ⑤ 화면 전역 동기화 (가능하면)
-  try{
-    // 총수/습득수(툴바), 헤더(순위/습득수), 로그인화면 랭킹 테이블까지 갱신
-    await updateCounts();
-    await updateHeaderUser();
-    await renderRanks();
-  }catch(e){ /* 네트워크 오류는 무시 */ }
-};
+      // 서버 저장 (실패해도 UI 유지)
+      try{
+        const all = await loadProgress();
+        const mine = new Set((all[currentUser]?.learnedIds || []));
+        mine.add(id);
+        await saveProgressForUser(currentUser, Array.from(mine));
+      }catch(e){
+        console.warn('[learned] 저장 실패 – UI 유지', e);
+      }
+
+      // 전역 최신화
+      try{
+        await updateCounts();
+        await updateHeaderUser();
+        await renderRanks();
+      }catch(e){}
+    };
 
     /* =============== 정답/추가설명/추가질문 관리 =============== */
     function renderAnswerList(){
@@ -696,7 +728,7 @@
       }
     })();
 
-    /* =============== 부트스트랩 =============== */
+    /* =============== 부트스트랩 (공유 병합 최신화) =============== */
     async function bootstrap(){
       const base=await loadBase();
       const std = standardize(base);
@@ -709,7 +741,7 @@
       await updateHeaderUser();
     }
 
-    // 초기: 순위만 먼저
+    // 초기: 순위 먼저
     renderRanks();
   </script>
 </body>
