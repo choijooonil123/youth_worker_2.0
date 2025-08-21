@@ -49,7 +49,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
     import {
-      getFirestore, collection, doc, getDoc, getDocs, setDoc,
+      getFirestore, collection, doc, getDocs, setDoc,
       deleteDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
@@ -73,7 +73,7 @@
         colShared : () => collection(db, "sharedData"),   // 모든 사용자 공유: 문제/정답/설명
         colProgress: () => collection(db, "progress")     // 사용자별 습득 이력
       };
-      window.__fb_api = { getDoc, getDocs, setDoc, doc, deleteDoc, writeBatch };
+      window.__fb_api = { getDocs, setDoc, doc, deleteDoc, writeBatch };
       console.log('[firebase] initialized');
     }catch(e){
       // 조용히 폴백 (알림 출력 금지)
@@ -157,8 +157,8 @@
       <div><div class="answer-box" id="userAnswer"></div></div>
       <div id="result"></div>
 
-      <!-- 추가설명 (길어도 스크롤) -->
-      <div id="extraExplanation" class="answer-box" style="max-height:200px; overflow-y:auto"></div>
+      <!-- ✅ 추가설명: 예전 스타일(상자 없이 보조 텍스트) -->
+      <div id="extraExplanation" style="padding:6px 0; color:var(--muted); font-size:14px; line-height:1.5"></div>
 
       <div id="extraAnswers"></div>
     </div>
@@ -189,8 +189,7 @@
     async function loadShared(){
       if(window.__cloudReady){
         try{
-          const { getDocs } = window.__fb_api;
-          const snap = await getDocs(window.__fb.colShared());
+          const snap = await window.__fb_api.getDocs(window.__fb.colShared());
           const arr = []; snap.forEach(d => arr.push(d.data()));
           lsSet(LS_SHARED, arr);
           return arr;
@@ -202,12 +201,11 @@
       lsSet(LS_SHARED, array);
       if(window.__cloudReady){
         try{
-          const { writeBatch, doc } = window.__fb_api;
           const db = window.__fb.db;
-          const batch = writeBatch(db);
+          const batch = window.__fb_api.writeBatch(db);
           array.forEach(rec=>{
             const id = `${normSubj(rec.subject)}::${rec.question}`;
-            batch.set(doc(db, "sharedData", id), rec, { merge:true });
+            batch.set(window.__fb_api.doc(db, "sharedData", id), rec, { merge:true });
           });
           await batch.commit();
         }catch(e){ /* 조용히 폴백 */ }
@@ -222,9 +220,8 @@
       lsSet(LS_SHARED, local);
       if(window.__cloudReady){
         try{
-          const { setDoc, doc } = window.__fb_api;
           const db = window.__fb.db;
-          await setDoc(doc(db,"sharedData",id), rec, { merge:true });
+          await window.__fb_api.setDoc(window.__fb_api.doc(db,"sharedData",id), rec, { merge:true });
         }catch(e){ /* 조용히 폴백 */ }
       }
     }
@@ -234,9 +231,8 @@
       lsSet(LS_SHARED, local.filter(x=>`${normSubj(x.subject)}::${x.question}`!==id));
       if(window.__cloudReady){
         try{
-          const { deleteDoc, doc } = window.__fb_api;
           const db = window.__fb.db;
-          await deleteDoc(doc(db, "sharedData", id));
+          await window.__fb_api.deleteDoc(window.__fb_api.doc(db, "sharedData", id));
         }catch(e){ /* 조용히 폴백 */ }
       }
     }
@@ -244,8 +240,7 @@
     async function loadProgress(){
       if(window.__cloudReady){
         try{
-          const { getDocs } = window.__fb_api;
-          const snap = await getDocs(window.__fb.colProgress());
+          const snap = await window.__fb_api.getDocs(window.__fb.colProgress());
           const obj = {}; snap.forEach(d => { obj[d.id] = d.data(); });
           lsSet(LS_PROG, obj);
           return obj;
@@ -259,9 +254,8 @@
       lsSet(LS_PROG, local);
       if(window.__cloudReady){
         try{
-          const { setDoc, doc } = window.__fb_api;
           const db = window.__fb.db;
-          await setDoc(doc(db, "progress", username), local[username], { merge:true });
+          await window.__fb_api.setDoc(window.__fb_api.doc(db, "progress", username), local[username], { merge:true });
         }catch(e){ /* 조용히 폴백 */ }
       }
     }
@@ -270,19 +264,26 @@
     async function renderRanks(){
       const progress = await loadProgress();
       const total = raw.length || 1;
-      const rows = Object.keys(progress).map(u=>{
-        const learned = (progress[u]?.learnedIds || []).length;
-        const rate = ((learned / total) * 100).toFixed(1);
-        return { u, learned, rate };
-      }).sort((a,b)=> b.learned - a.learned);
+
+      // ✅ 관리자 제외: 'admin' 및 '관리자' 계정은 순위 리스트에서 필터링
+      const EXCLUDE = new Set(['admin','관리자']);
+      const entries = Object.keys(progress)
+        .filter(u => !EXCLUDE.has(u))
+        .map(u=>{
+          const learned = (progress[u]?.learnedIds || []).length;
+          const rate = ((learned / total) * 100).toFixed(1);
+          return { u, learned, rate };
+        })
+        .sort((a,b)=> b.learned - a.learned);
 
       const html = '<h3>학습자 순위</h3>' + (
-        rows.length
-          ? rows.map((r,i)=>`<div>${i+1}위 ${esc(r.u)} — 습득수: ${r.learned}, 습득율: ${r.rate}%</div>`).join('')
+        entries.length
+          ? entries.map((r,i)=>`<div>${i+1}위 ${esc(r.u)} — 습득수: ${r.learned}, 습득율: ${r.rate}%</div>`).join('')
           : '<div style="opacity:.7">아직 데이터가 없습니다</div>'
       );
       document.getElementById('rankList').innerHTML = html;
     }
+
     async function updateHeaderUser(){
       const rankEl = document.getElementById('headerRank');
       const userEl = document.getElementById('headerUser');
@@ -438,7 +439,7 @@
       document.getElementById('mainPanel').style.display='none';
       document.getElementById('loginPanel').style.display='block';
       document.getElementById('logoutBtn').style.display='none';
-      await renderRanks();
+      await renderRanks();     // 첫 화면 순위(관리자 제외) 갱신
       await updateHeaderUser();
     };
 
@@ -548,7 +549,7 @@
       // 갱신
       await updateCounts();
       await updateHeaderUser();
-      await renderRanks();
+      await renderRanks();     // 첫 화면 순위도 갱신(관리자 제외 적용)
       await updateGlobalStat();
     };
 
@@ -669,11 +670,11 @@
       }
     })();
 
-    /* ===== 부트스트랩: 로그인 전에도 순위 노출 ===== */
+    /* ===== 부트스트랩: 로그인 전에도 순위 노출 (관리자 제외 적용) ===== */
     (async ()=>{
       const base = await loadBase();        // 기본 문제
       raw = base.map((q,i)=>({...q,_idx:i}));
-      await renderRanks();                   // 로그인 전 순위(전체 기준)
+      await renderRanks();                   // 로그인 전 순위(관리자 제외)
     })();
   </script>
 </body>
