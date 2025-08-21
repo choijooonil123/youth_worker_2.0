@@ -466,13 +466,26 @@
     };
 
     /* ===== 유틸: 정규화 + 유사도 & 답변완료 ===== */
-    function normalize(s){
-      return String(s)
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-    }
+// 문자열 정규화: 문장부호 제거, 공백 정리, 소문자화
+function normalize(s){
+  const str = String(s ?? '');
+  // 브라우저 호환을 위해 유니코드 정규식이 없으면 기본 패턴 사용
+  try {
+    return str
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ') // 문자/숫자/공백 외 제거 (현대 브라우저)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  } catch {
+    // 구형 브라우저 폴백
+    return str
+      .replace(/[^A-Za-z0-9가-힣\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+}
+
     function similarity(a,b){
       const sa=new Set(String(a).split(/\s+/).filter(Boolean));
       const sb=new Set(String(b).split(/\s+/).filter(Boolean));
