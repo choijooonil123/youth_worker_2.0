@@ -492,29 +492,43 @@ function normalize(s){
       let inter=0; sa.forEach(w=>{ if(sb.has(w)) inter++; });
       return inter/(sa.size+sb.size-inter||1);
     }
-    document.getElementById('submitBtn').onclick = ()=>{
-      const q=raw.find(x=>x._idx===currentIdx);
-      if(!q){ alert('문항을 찾을 수 없습니다.'); return; }
 
-      if(window.recognition){ try{ recognition.stop(); }catch(_){} } // STT 중지
+document.getElementById('submitBtn').onclick = () => {
+  // 1) 현재 질문
+  const q = raw.find(x => x._idx === currentIdx);
+  if (!q) { alert('문항을 찾을 수 없습니다.'); return; }
 
-      const user=(document.getElementById('userAnswer').textContent||'').trim();
-      const golds = Array.isArray(q.answers) && q.answers.length ? q.answers
+  // 2) STT 중지(계속 텍스트가 흘러들어오는 문제 방지)
+  if (window.recognition) { try { recognition.stop(); } catch (_) {} }
+
+  // 3) 사용자 답변 텍스트
+  let user = (document.getElementById('userAnswer').textContent || '').trim();
+  // 녹음 플레이스홀더일 경우 빈 값으로 처리
+  if (user === '(녹음중...)') user = '';
+
+  // 4) 정답 원문(answers 배열 우선, 없으면 legacy answer)
+  const answers = Array.isArray(q.answers) && q.answers.length ? q.answers
                    : (q.answer ? [q.answer] : []);
-      const activeIdx = Number.isInteger(q.active) ? q.active : 0;
-      const gold = golds[activeIdx] || golds[0] || '';
+  // active가 문자열일 수도 있어 정수화
+  const activeIdx = Number.isInteger(q.active) ? q.active : parseInt(q.active, 10) || 0;
+  const gold = answers[activeIdx] || answers[0] || '';
 
-      if(!gold){
-        document.getElementById('result').innerHTML =
-          `<div class='answer-box'>정답이 등록되어 있지 않습니다. <b>“정답 추가”</b> 버튼으로 정답을 등록하세요.</div>`;
-        return;
-      }
+  // 5) 정답 없을 때 안내
+  if (!gold) {
+    document.getElementById('result').innerHTML =
+      `<div class='answer-box'>정답이 등록되어 있지 않습니다. <b>“정답 추가”</b> 버튼으로 정답을 등록하세요.</div>`;
+    return;
+  }
 
-      const sim = similarity(normalize(user), normalize(gold));
-      document.getElementById('result').innerHTML =
-        `<div class='answer-box'>${esc(gold)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
-      speak('정답입니다. ' + gold);
-    };
+  // 6) 정규화 후 유사도 계산
+  const sim = similarity(normalize(user), normalize(gold));
+
+  // 7) 결과 표시 + 음성 출력
+  document.getElementById('result').innerHTML =
+    `<div class='answer-box'>${esc(gold)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
+  speak('정답입니다. ' + gold);
+};
+
 
     /* ===== 습득완료 ===== */
     document.getElementById('learnedBtn').onclick = async ()=>{
