@@ -42,6 +42,7 @@
 
     /* 로그인 박스 컴팩트 */
     .login-card{width:min(420px,92vw);margin:0 auto}
+    .muted{color:#a7b3d4;opacity:.85}
   </style>
 
   <!-- Firebase SDK (ESM) -->
@@ -69,13 +70,14 @@
       window.__cloudReady = true;
       window.__fb = {
         db,
-        colShared : () => collection(db, "sharedData"),
-        colProgress: () => collection(db, "progress")
+        colShared : () => collection(db, "sharedData"),   // 모든 사용자 공유: 문제/정답/설명
+        colProgress: () => collection(db, "progress")     // 사용자별 습득 이력
       };
       window.__fb_api = { getDoc, getDocs, setDoc, doc, deleteDoc, writeBatch };
       console.log('[firebase] initialized');
     }catch(e){
-      console.warn('[firebase] init failed -> local fallback only', e);
+      // 조용히 폴백 (알림 출력 금지)
+      console.warn('[firebase] init failed -> local fallback only');
       window.__cloudReady = false;
     }
   </script>
@@ -130,6 +132,11 @@
           <input id="importFile" type="file" accept="application/json" style="display:none">
         </div>
       </div>
+      <div style="padding:8px;display:flex;gap:12px;flex-wrap:wrap">
+        <div class="pill" id="globalTotal">총문제수: 0</div>
+        <div class="pill" id="globalLearned">총습득수: 0</div>
+        <div class="pill" id="globalRate">습득율: 0%</div>
+      </div>
       <div id="grid" class="grid"></div>
     </div>
   </div>
@@ -142,13 +149,17 @@
         <button id="speakBtn" class="btn">🔊 질문 다시듣기</button>
         <button id="recordBtn" class="btn">🎤 답변녹음</button>
         <button id="submitBtn" class="btn primary">✅ 답변완료</button>
-        <button id="addAnswerBtn" class="btn">➕ 정답 추가</button><!-- ← 라벨 변경 -->
+        <button id="addAnswerBtn" class="btn">➕ 정답 추가</button>
         <button id="deleteQuestionBtn" class="btn danger">🗑 질문 삭제</button>
         <button id="learnedBtn" class="btn ok">📌 습득완료</button>
         <button id="closeBtn" class="btn danger">❌ 닫기</button>
       </div>
       <div><div class="answer-box" id="userAnswer"></div></div>
       <div id="result"></div>
+
+      <!-- 추가설명 (길어도 스크롤) -->
+      <div id="extraExplanation" class="answer-box" style="max-height:200px; overflow-y:auto"></div>
+
       <div id="extraAnswers"></div>
     </div>
   </dialog>
@@ -183,7 +194,7 @@
           const arr = []; snap.forEach(d => arr.push(d.data()));
           lsSet(LS_SHARED, arr);
           return arr;
-        }catch(e){ console.warn('[loadShared] cloud fail -> local fallback', e); }
+        }catch(e){ /* 조용히 폴백 */ }
       }
       return lsGet(LS_SHARED, []);
     }
@@ -199,13 +210,13 @@
             batch.set(doc(db, "sharedData", id), rec, { merge:true });
           });
           await batch.commit();
-        }catch(e){ console.warn('[saveShared] cloud fail (local kept)', e); }
+        }catch(e){ /* 조용히 폴백 */ }
       }
     }
     async function persistQuestion(q){
       const local = lsGet(LS_SHARED, []);
       const id = qKey(q);
-      const rec = { subject:q.subject, question:q.question, answers:q.answers||[], active:q.active||0 };
+      const rec = { subject:q.subject, question:q.question, answers:q.answers||[], active:q.active||0, explanation:q.explanation||'' };
       const i = local.findIndex(x=>`${normSubj(x.subject)}::${x.question}`===id);
       if(i>=0) local[i]=rec; else local.push(rec);
       lsSet(LS_SHARED, local);
@@ -214,7 +225,7 @@
           const { setDoc, doc } = window.__fb_api;
           const db = window.__fb.db;
           await setDoc(doc(db,"sharedData",id), rec, { merge:true });
-        }catch(e){ console.warn('[persistQuestion] cloud fail (local kept)', e); }
+        }catch(e){ /* 조용히 폴백 */ }
       }
     }
     async function deleteSharedQuestion(q){
@@ -226,7 +237,7 @@
           const { deleteDoc, doc } = window.__fb_api;
           const db = window.__fb.db;
           await deleteDoc(doc(db, "sharedData", id));
-        }catch(e){ console.warn('[deleteSharedQuestion] cloud fail (local kept)', e); }
+        }catch(e){ /* 조용히 폴백 */ }
       }
     }
 
@@ -238,7 +249,7 @@
           const obj = {}; snap.forEach(d => { obj[d.id] = d.data(); });
           lsSet(LS_PROG, obj);
           return obj;
-        }catch(e){ console.warn('[loadProgress] cloud fail -> local', e); }
+        }catch(e){ /* 조용히 폴백 */ }
       }
       return lsGet(LS_PROG, {});
     }
@@ -251,14 +262,14 @@
           const { setDoc, doc } = window.__fb_api;
           const db = window.__fb.db;
           await setDoc(doc(db, "progress", username), local[username], { merge:true });
-        }catch(e){ console.warn('[saveProgressForUser] cloud fail (local kept)', e); }
+        }catch(e){ /* 조용히 폴백 */ }
       }
     }
 
-    /* ===== 순위/헤더 ===== */
+    /* ===== 순위/헤더/지표 ===== */
     async function renderRanks(){
       const progress = await loadProgress();
-      const total = raw.length || 1; // 전체 문제 수
+      const total = raw.length || 1;
       const rows = Object.keys(progress).map(u=>{
         const learned = (progress[u]?.learnedIds || []).length;
         const rate = ((learned / total) * 100).toFixed(1);
@@ -297,11 +308,19 @@
       userEl.style.display='inline-block';
       lo.style.display    = 'inline-block';
     }
+    async function updateGlobalStat(){
+      const progress = await loadProgress();
+      const total = raw.length;
+      const learned = currentUser ? (progress[currentUser]?.learnedIds || []).length : 0;
+      document.getElementById('globalTotal').textContent = `총문제수: ${total}`;
+      document.getElementById('globalLearned').textContent = `총습득수: ${learned}`;
+      document.getElementById('globalRate').textContent = `습득율: ${total? (learned/total*100).toFixed(1):0}%`;
+    }
 
     /* ===== 기본 문제 데이터 ===== */
     const FALLBACK = [
-      { subject:'샘플과목', question:'청소년상담에서 라포의 핵심은?', answers:['진정성, 공감, 존중을 통해 신뢰관계 형성'], active:0 },
-      { subject:'샘플과목', question:'청소년 정책의 3대 축은?', answers:['보호, 참여, 발달'], active:0 }
+      { subject:'샘플과목', question:'청소년상담에서 라포의 핵심은?', answers:['진정성, 공감, 존중을 통해 신뢰관계 형성'], active:0, explanation:'신뢰 형성을 위해 상담자의 진정성·공감·무조건적 존중이 중요합니다.' },
+      { subject:'샘플과목', question:'청소년 정책의 3대 축은?', answers:['보호, 참여, 발달'], active:0, explanation:'보호(위험·권리침해로부터 보호), 참여(의사결정 참여), 발달(건강한 성장 지원).' }
     ];
     async function loadBase(){
       try{
@@ -312,7 +331,8 @@
           subject:normSubj(x.subject),
           question:x.question,
           answers:Array.isArray(x.answers)?x.answers.filter(Boolean):[(x.answer||'')].filter(Boolean),
-          active:(typeof x.active==='number'?x.active:0)
+          active:(typeof x.active==='number'?x.active:0),
+          explanation: x.explanation || ''
         })) : FALLBACK;
       }catch{ return FALLBACK; }
     }
@@ -329,8 +349,15 @@
           const cur=map.get(id);
           cur.answers=[...new Set([...(cur.answers||[]), ...((q.answers||[]).filter(Boolean))])];
           if(typeof q.active==='number') cur.active=q.active;
+          if (q.explanation) cur.explanation = q.explanation;
         }else{
-          map.set(id, {subject:normSubj(q.subject),question:q.question,answers:(q.answers||[]).filter(Boolean),active:(q.active||0)});
+          map.set(id, {
+            subject:normSubj(q.subject),
+            question:q.question,
+            answers:(q.answers||[]).filter(Boolean),
+            active:(q.active||0),
+            explanation: q.explanation || ''
+          });
         }
       });
       raw = Array.from(map.values()).map((q,i)=>({...q,_idx:i}));
@@ -340,6 +367,7 @@
       await updateCounts();
       await renderRanks();
       await updateHeaderUser();
+      await updateGlobalStat();
     }
 
     async function applyLearnedFilterForCurrentUser(){
@@ -399,11 +427,9 @@
       document.getElementById('logoutBtn').style.display='inline-block';
       document.getElementById('grid').innerHTML = '<div style="opacity:.7;padding:12px">데이터 불러오는 중…</div>';
 
-      // 진행도 문서 보장
       const all = await loadProgress();
       if(!all[currentUser]){ await saveProgressForUser(currentUser, []); }
 
-      // 렌더
       await bootstrap();
     };
 
@@ -424,6 +450,7 @@
       await updateCounts();
       await renderRanks();
       await updateHeaderUser();
+      await updateGlobalStat();
     };
 
     /* ===== 질문 모달 ===== */
@@ -433,6 +460,7 @@
       document.getElementById('qTitle').textContent=q.question;
       document.getElementById('userAnswer').textContent='';
       document.getElementById('result').innerHTML='';
+      document.getElementById('extraExplanation').textContent = q.explanation || '추가설명이 없습니다.';
       renderAnswerList(q);
       document.getElementById('qd').showModal();
       speak(q.question);
@@ -465,70 +493,40 @@
       startRecognition();
     };
 
-    /* ===== 유틸: 정규화 + 유사도 & 답변완료 ===== */
-// 문자열 정규화: 문장부호 제거, 공백 정리, 소문자화
-function normalize(s){
-  const str = String(s ?? '');
-  // 브라우저 호환을 위해 유니코드 정규식이 없으면 기본 패턴 사용
-  try {
-    return str
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ') // 문자/숫자/공백 외 제거 (현대 브라우저)
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  } catch {
-    // 구형 브라우저 폴백
-    return str
-      .replace(/[^A-Za-z0-9가-힣\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-}
-
+    /* ===== 유사도/답변완료 ===== */
+    function normalize(s){
+      const str = String(s ?? '');
+      try {
+        return str.replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim().toLowerCase();
+      } catch {
+        return str.replace(/[^A-Za-z0-9가-힣\s]/g,' ').replace(/\s+/g,' ').trim().toLowerCase();
+      }
+    }
     function similarity(a,b){
       const sa=new Set(String(a).split(/\s+/).filter(Boolean));
       const sb=new Set(String(b).split(/\s+/).filter(Boolean));
       let inter=0; sa.forEach(w=>{ if(sb.has(w)) inter++; });
       return inter/(sa.size+sb.size-inter||1);
     }
-
-document.getElementById('submitBtn').onclick = () => {
-  // 1) 현재 질문
-  const q = raw.find(x => x._idx === currentIdx);
-  if (!q) { alert('문항을 찾을 수 없습니다.'); return; }
-
-  // 2) STT 중지(계속 텍스트가 흘러들어오는 문제 방지)
-  if (window.recognition) { try { recognition.stop(); } catch (_) {} }
-
-  // 3) 사용자 답변 텍스트
-  let user = (document.getElementById('userAnswer').textContent || '').trim();
-  // 녹음 플레이스홀더일 경우 빈 값으로 처리
-  if (user === '(녹음중...)') user = '';
-
-  // 4) 정답 원문(answers 배열 우선, 없으면 legacy answer)
-  const answers = Array.isArray(q.answers) && q.answers.length ? q.answers
-                   : (q.answer ? [q.answer] : []);
-  // active가 문자열일 수도 있어 정수화
-  const activeIdx = Number.isInteger(q.active) ? q.active : parseInt(q.active, 10) || 0;
-  const gold = answers[activeIdx] || answers[0] || '';
-
-  // 5) 정답 없을 때 안내
-  if (!gold) {
-    document.getElementById('result').innerHTML =
-      `<div class='answer-box'>정답이 등록되어 있지 않습니다. <b>“정답 추가”</b> 버튼으로 정답을 등록하세요.</div>`;
-    return;
-  }
-
-  // 6) 정규화 후 유사도 계산
-  const sim = similarity(normalize(user), normalize(gold));
-
-  // 7) 결과 표시 + 음성 출력
-  document.getElementById('result').innerHTML =
-    `<div class='answer-box'>${esc(gold)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
-  speak('정답입니다. ' + gold);
-};
-
+    document.getElementById('submitBtn').onclick = ()=>{
+      const q=raw.find(x=>x._idx===currentIdx);
+      if(!q){ alert('문항을 찾을 수 없습니다.'); return; }
+      if(window.recognition){ try{ recognition.stop(); }catch(_){} }
+      let user=(document.getElementById('userAnswer').textContent||'').trim();
+      if(user === '(녹음중...)') user = '';
+      const golds = Array.isArray(q.answers)&&q.answers.length? q.answers : [];
+      const activeIdx = Number.isInteger(q.active) ? q.active : parseInt(q.active, 10) || 0;
+      const gold = golds[activeIdx] || golds[0] || '';
+      if(!gold){
+        document.getElementById('result').innerHTML =
+          `<div class='answer-box'>정답이 등록되어 있지 않습니다. <b>“정답 추가”</b> 버튼으로 정답을 등록하세요.</div>`;
+        return;
+      }
+      const sim = similarity(normalize(user), normalize(gold));
+      document.getElementById('result').innerHTML =
+        `<div class='answer-box'>${esc(gold)}</div><div class='score'>유사도 ${(sim*100).toFixed(1)}%</div>`;
+      speak('정답입니다. ' + gold);
+    };
 
     /* ===== 습득완료 ===== */
     document.getElementById('learnedBtn').onclick = async ()=>{
@@ -536,7 +534,7 @@ document.getElementById('submitBtn').onclick = () => {
       const q = raw.find(x=>x._idx===currentIdx); if(!q) return;
       const id = qKey(q);
 
-      // 즉시 UI에서 제거
+      // UI 제거
       data = data.filter(item => qKey(item) !== id);
       renderBySubject(currentSubject());
       closeQuestion();
@@ -551,6 +549,7 @@ document.getElementById('submitBtn').onclick = () => {
       await updateCounts();
       await updateHeaderUser();
       await renderRanks();
+      await updateGlobalStat();
     };
 
     /* ===== 정답 관리 ===== */
@@ -597,9 +596,10 @@ document.getElementById('submitBtn').onclick = () => {
       const subj=prompt('과목명을 입력하세요'); if(!subj) return;
       const ques=prompt('새 질문을 입력하세요'); if(!ques) return;
       const answ=prompt('정답(모범답안)을 입력하세요'); if(!answ) return;
+      const expl=prompt('추가설명(선택)'); // 빈 값 허용
       const id = `${normSubj(subj)}::${ques}`;
       if(raw.some(x=> qKey(x)===id)){ alert('이미 존재하는 문항입니다.'); return; }
-      const seed = { subject:normSubj(subj), question:ques, answers:[answ], active:0 };
+      const seed = { subject:normSubj(subj), question:ques, answers:[answ], active:0, explanation: expl || '' };
       const current = await loadShared();
       current.push(seed);
       await saveShared(current);
@@ -654,7 +654,6 @@ document.getElementById('submitBtn').onclick = () => {
           await bootstrap();
           alert('가져오기가 완료되었습니다.');
         }catch(e){
-          console.error(e);
           alert('가져오기 실패: ' + (e?.message||e));
         }
       }
