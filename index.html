@@ -112,6 +112,20 @@
     }
   </script>
 
+
+<script>
+  function showError(msg, err){
+    const box = document.getElementById('envErr');
+    const detail = err ? `  [${err.code||''}] ${err.message||''}` : '';
+    if(box){ box.textContent = msg + detail; }
+    console.error('[AUTH ERROR]', msg, err);
+    // 임시: 에러를 팝업으로도 보여주기
+    if(err) alert(`${msg}\n${err.code||''}\n${err.message||''}`);
+  }
+</script>
+
+
+
   <!-- 파이어베이스 실패 시 전역 폴백 (UI는 계속 동작) -->
   <script>
     window.__cloudReady = window.__cloudReady || false;
