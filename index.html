@@ -524,6 +524,14 @@
       data = raw.filter(q=> !learned.has(qKey(q))).map(q=>({...q}));
     }
 
+
+onAuthStateChanged(window.__fb.auth, async (user)=>{
+  console.log('[AUTH] state changed =>', user?.uid || null); // ← 추가
+  if(user){ ... } else { ... }
+});
+
+
+
     async function updateCounts(){
       const subj = currentSubject();
       const p = await loadProgress();
