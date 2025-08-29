@@ -39,6 +39,7 @@
     textarea{width:100%;background:#0b1330;color:var(--ink);border:1px solid #212c5c;border-radius:14px;padding:8px;resize:vertical;min-height:80px}
 
     .login-card{width:min(480px,92vw);margin:0 auto}
+
     #extraInfo { max-height:50vh; overflow:auto; resize:vertical; }
     .score{font-size:36px;font-weight:800}
     .answer-box, #extraInfo { font-size:14px; }
@@ -55,15 +56,14 @@
       createUserWithEmailAndPassword, signOut, updateProfile
     } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 
-    /* 🔑 Firebase 콘솔 값 */
     const firebaseConfig = {
       apiKey: "AIzaSyB8uvt7bkZokVkHT7nO0QRaB9WpEe2g2C4",
       authDomain: "youth-worker.firebaseapp.com",
       projectId: "youth-worker",
-      storageBucket: "youth-worker.appspot.com",
+      storageBucket: "youth-worker.firebasestorage.app",
       messagingSenderId: "666890915384",
-      appId: "1:666890915384:web:2dbc2b4d35aa9e3948a0cd",
-      measurementId: "G-GT3X3E9VTB"
+      appId: "1:666890915384:web:90381989a786934648a0cd",
+      measurementId: "G-T1NCJXS15N"
     };
 
     try{
@@ -89,18 +89,7 @@
     }
   </script>
 
-  <!-- 에러 출력(단일 정의) -->
-  <script>
-    function showError(msg, err){
-      const box = document.getElementById('envErr');
-      const detail = err ? ` [${err.code||''}] ${err.message||''}` : '';
-      if(box){ box.textContent = msg + detail; }
-      console.error('[AUTH ERROR]', msg, err);
-      if(err) alert(`${msg}\n${err.code||''}\n${err.message||''}`);
-    }
-  </script>
-
-  <!-- 파이어베이스 실패 시 폴백 -->
+  <!-- 파이어베이스 실패 시 전역 폴백 (UI는 계속 동작) -->
   <script>
     window.__cloudReady = window.__cloudReady || false;
     window.__fb       = window.__fb       || { db:null, auth:null, colShared:()=>({}), colProgress:()=>({}), colUsers:()=>({}) };
@@ -166,7 +155,7 @@
     </div>
   </div>
 
-  <!-- 질문 모달 -->
+  <!-- 질문 모달 등 이하 기존 로직 유지 -->
   <dialog id="qd">
     <div class="dlg">
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -222,9 +211,18 @@
       // 'admin@example.com'
     ]);
 
-    const normSubj = s => (s && String(s).trim()) ? String(s).trim() : '기타';
-    const esc = s => String(s).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
+    const normSubj = s => {
+      const v = (s??'').toString().trim();
+      return v.length ? v : '기타';
+    };
+    const esc = s => String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     const qKey = q => `${normSubj(q.subject)}::${q.question}`;
+
+    function showError(msg){
+      const box = document.getElementById('envErr');
+      if(box){ box.textContent = msg; }
+      console.error('[APP]', msg);
+    }
 
     /* ================= 로컬 폴백 저장소 ================= */
     function lsGet(key, def){ try{ const v=localStorage.getItem(key); return v? JSON.parse(v): def; }catch{return def;} }
@@ -301,7 +299,7 @@
       return lsGet(LS_SHARED, []);
     }
     async function saveShared(array){
-      lsSet(LS_SHARED, array);
+      lsSet(LS_SHARED, array); // 로컬 항상 유지
       if(window.__cloudReady){
         try{
           const { writeBatch, doc } = window.__fb_api;
@@ -389,8 +387,10 @@
         .map(uid=>{
           const learned = (progress[uid]?.learnedIds || []).length;
           const rate = ((learned / total) * 100).toFixed(1);
-          const info = usersMap.get(uid) || { displayName: uid, role: 'user' };
-          return { uid, name: info.displayName || uid, role: info.role || 'user', learned, rate };
+
+          // ✅ 표시이름 우선, 없으면 '사용자' (UID 노출 방지)
+          const info = usersMap.get(uid) || { displayName: '사용자', role: 'user' };
+          return { uid, name: info.displayName || '사용자', role: info.role || 'user', learned, rate };
         })
         .filter(r=> r.role !== 'admin')
         .sort((a,b)=> b.learned - a.learned);
@@ -432,6 +432,16 @@
       rankEl.style.display='inline-block';
       userEl.style.display='inline-block';
       lo.style.display    = 'inline-block';
+    }
+
+    /* ===== 표시이름을 즉시 헤더에 보여주기(대기 없이) — ★ 추가 ===== */
+    function setHeaderImmediate(){
+      if(!currentUser) return;
+      const userEl = document.getElementById('headerUser');
+      const lo     = document.getElementById('logoutBtn');
+      userEl.textContent = `사용자: ${currentUser.name}`;
+      userEl.style.display = 'inline-block';
+      lo.style.display = 'inline-block';
     }
 
     /* ================= 베이스 데이터 ================= */
@@ -506,18 +516,33 @@
       document.getElementById('countLearned').textContent = `과목별 : 습득수 ${subjectLearned}`;
     }
 
-    /* ================= 과목/리스트 ================= */
-    function subjects(){ return Array.from(new Set(raw.map(x=>normSubj(x.subject)))).sort(); }
+    /* ================= 과목/리스트 (안정화) ================= */
+    function subjects(){
+      const list = raw.map(q => normSubj(q.subject));
+      return Array.from(new Set(list)).sort((a,b)=> a.localeCompare(b));
+    }
+
     function initSubjectSelect(){
-      const sel=document.getElementById('subjectSelect');
-      const subs=subjects();
-      sel.innerHTML=subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
-      if(subs.length) sel.value=subs[0]; else sel.value='';
-      sel.onchange = ()=>{ renderBySubject(currentSubject()); updateCounts(); };
+      const sel = document.getElementById('subjectSelect');
+      const prev = sel.value;
+      const subs = subjects();
+      sel.innerHTML = subs.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+      sel.value = subs.includes(prev) ? prev : (subs[0] || '기타');
+      sel.onchange = async ()=>{
+        renderBySubject(currentSubject());
+        await updateCounts();
+      };
       renderBySubject(currentSubject());
       updateCounts();
     }
-    function currentSubject(){ const sel=document.getElementById('subjectSelect'); return sel&&sel.value?sel.value:(subjects()[0]||'기타'); }
+
+    function currentSubject(){
+      const sel=document.getElementById('subjectSelect');
+      const subs = subjects();
+      if(sel && sel.value && subs.includes(sel.value)) return sel.value;
+      return subs[0] || '기타';
+    }
+
     function renderBySubject(subj){
       const grid=document.getElementById('grid');
       if(!raw || raw.length===0){
@@ -557,16 +582,24 @@
         if(!email||!pass){ showError('이메일과 비밀번호를 입력하세요.'); return; }
         const { signInWithEmailAndPassword } = window.__fb_api;
         await signInWithEmailAndPassword(window.__fb.auth, email, pass);
+
+        // 로그인 성공 후 안전망: 훅이 늦게 오거나 누락될 때 즉시 전환
+        const u = window.__fb.auth.currentUser;
+        if (u) {
+          currentUser = { uid: u.uid, name: u.displayName || (u.email ? u.email.split('@')[0] : '사용자'), role: ADMIN_EMAILS.has(u.email) ? 'admin' : 'user' };
+          await ensureUserProfile(u);
+          await postLoginUI();
+        }
       }catch(err){
+        const code = err?.code || '';
         const map = {
           'auth/invalid-credential':'자격 증명이 올바르지 않습니다(비밀번호 오류 또는 다른 로그인 방식).',
           'auth/user-not-found':'계정을 찾을 수 없습니다. 먼저 회원가입을 해주세요.',
           'auth/wrong-password':'비밀번호가 올바르지 않습니다.',
           'auth/invalid-email':'이메일 형식이 올바르지 않습니다.',
-          'auth/network-request-failed':'네트워크 오류입니다.',
-          'auth/unauthorized-domain':'Authorized domains에 현재 도메인을 추가해야 합니다.'
+          'auth/network-request-failed':'네트워크 오류입니다.'
         };
-        showError(map[err?.code] || '로그인 실패', err);
+        showError(map[code] || `로그인 실패: ${code || err?.message || err}`);
       }
     };
 
@@ -582,15 +615,15 @@
         await ensureUserProfile(cred.user);
         showError('회원가입 완료! 이제 로그인합니다.');
       }catch(err){
+        const code = err?.code || '';
         const map = {
           'auth/email-already-in-use':'이미 가입된 이메일입니다. 로그인 또는 비밀번호 재설정을 사용하세요.',
           'auth/invalid-email':'이메일 형식이 올바르지 않습니다.',
           'auth/weak-password':'비밀번호가 너무 약합니다(최소 6자).',
           'auth/operation-not-allowed':'Email/Password 제공자가 비활성화되어 있습니다.',
-          'auth/network-request-failed':'네트워크 오류입니다.',
-          'auth/unauthorized-domain':'Authorized domains에 현재 도메인을 추가해야 합니다.'
+          'auth/network-request-failed':'네트워크 오류입니다.'
         };
-        showError(map[err?.code] || '회원가입 실패', err);
+        showError(map[code] || `회원가입 실패: ${code || err?.message || err}`);
       }
     };
 
@@ -602,12 +635,13 @@
         await mod.sendPasswordResetEmail(window.__fb.auth, email);
         showError('비밀번호 재설정 메일을 보냈습니다. 메일함을 확인하세요.');
       }catch(err){
+        const code = err?.code || '';
         const map = {
           'auth/invalid-email':'이메일 형식이 올바르지 않습니다.',
           'auth/user-not-found':'해당 이메일의 계정이 없습니다.',
           'auth/network-request-failed':'네트워크 오류입니다.'
         };
-        showError(map[err?.code] || '재설정 실패', err);
+        showError(map[code] || `재설정 실패: ${code || err?.message || err}`);
       }
     };
 
@@ -617,23 +651,38 @@
         await signOut(window.__fb.auth);
       }catch(e){
         console.warn('[logout] fail', e);
+      }finally{
+        // ✅ 훅 지연/누락 대비: 즉시 UI 원복 (화면전환 보장)
+        currentUser = null;
+        document.getElementById('mainPanel').style.display='none';
+        document.getElementById('loginPanel').style.display='block';
+        document.getElementById('logoutBtn').style.display='none';
+        document.getElementById('headerUser').style.display='none';
+        document.getElementById('headerRank').style.display='none';
       }
     };
 
-    // 인증 상태 변화 핸들러 (정상 위치)
+    /*================= 인증 상태 변화 핸들러 (원래 버전으로 복구) =================*/
     (function watchAuth(){
       if(!window.__cloudReady) return;
       const { onAuthStateChanged } = window.__fb_api;
       onAuthStateChanged(window.__fb.auth, async (user)=>{
-        console.log('[AUTH] state changed =>', user ? user.uid : null);
         if(user){
           await ensureUserProfile(user);
           currentUser = {
             uid: user.uid,
-            name: user.displayName || (user.email? user.email.split('@')[0] : '사용자'),
+            name: user.displayName || (user.email ? user.email.split('@')[0] : '사용자'),
             role: ADMIN_EMAILS.has(user.email) ? 'admin' : 'user'
           };
-          await postLoginUI();
+
+          // 헤더 즉시 반영 (첫 화면에서 표시이름 보이도록)
+          const userEl = document.getElementById('headerUser');
+          const lo = document.getElementById('logoutBtn');
+          userEl.textContent = `사용자: ${currentUser.name}`;
+          userEl.style.display = 'inline-block';
+          lo.style.display = 'inline-block';
+
+          await postLoginUI();  // ▶ 로그인 화면 → 메인 화면 전환
         }else{
           currentUser = null;
           document.getElementById('mainPanel').style.display='none';
@@ -674,7 +723,7 @@
       await updateHeaderUser();
     }
 
-    /* ================= 질문 모달 ================= */
+    /* ================= 질문 모달/음성/유사도/추가기능 (기존 유지) ================= */
     function openQuestion(idx){
       currentIdx=idx;
       const q=raw.find(x=>x._idx===idx); if(!q) return;
@@ -694,7 +743,6 @@
     window.openQuestion = openQuestion;
     document.getElementById('closeBtn').onclick = closeQuestion;
 
-    /* ================= 음성 합성/인식 ================= */
     function speak(txt){ const u=new SpeechSynthesisUtterance(txt); u.lang='ko-KR'; speechSynthesis.cancel(); speechSynthesis.speak(u); }
     document.getElementById('speakBtn').onclick = ()=>{ const q=raw.find(x=>x._idx===currentIdx); if(q) speak(q.question); };
     function startRecognition(){
@@ -718,7 +766,6 @@
       startRecognition();
     };
 
-    /* ================= 유사도 & 답변완료 ================= */
     function similarity(a,b){
       const sa=new Set(String(a).split(/\s+/).filter(Boolean));
       const sb=new Set(String(b).split(/\s+/).filter(Boolean));
@@ -739,7 +786,6 @@
       speak('정답입니다. ' + gold);
     };
 
-    /* ================= 습득완료 ================= */
     document.getElementById('learnedBtn').onclick = async ()=>{
       if(!currentUser){ alert('로그인 후 사용하세요.'); return; }
       const q = raw.find(x=>x._idx===currentIdx); if(!q) return;
@@ -763,7 +809,6 @@
       }catch(e){}
     };
 
-    /* ================= 정답/설명/추가질문 관리 ================= */
     function renderAnswerList(){
       const holder=document.getElementById('extraAnswers');
       const q=raw.find(x=>x._idx===currentIdx);
@@ -906,8 +951,8 @@
       await bootstrap();
     };
 
-    /* ================= 내보내기/가져오기 ================= */
-    (function(){
+    /* ================= 내보내기/가져오기 (바인딩 안정화) — ★ ================= */
+    document.addEventListener('DOMContentLoaded', ()=>{
       const exportBtn = document.getElementById('exportBtn');
       const importBtn = document.getElementById('importBtn');
       const importFile = document.getElementById('importFile');
@@ -916,7 +961,8 @@
         const blob = new Blob([text], {type: 'application/json;charset=utf-8'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = filename;
+        a.href = url;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         URL.revokeObjectURL(url);
@@ -924,11 +970,20 @@
       }
 
       async function exportAll(){
-        const shared = await loadShared();
-        const progress = await loadProgress();
-        const payload = { version: 3, exportedAt: new Date().toISOString(), shared, progress };
-        download('youth-interview-backup.json', JSON.stringify(payload,null,2));
-        alert('내보내기가 완료되었습니다.');
+        try{
+          const shared = await loadShared();
+          const progress = await loadProgress();
+          const payload = {
+            version: 3,
+            exportedAt: new Date().toISOString(),
+            shared,
+            progress
+          };
+          download('youth-interview-backup.json', JSON.stringify(payload, null, 2));
+          alert('내보내기가 완료되었습니다.');
+        }catch(e){
+          alert('내보내기 실패: ' + (e?.message || e));
+        }
       }
 
       async function importAll(file){
@@ -947,6 +1002,7 @@
             const learned = Array.from(new Set((obj.progress[key]?.learnedIds)||[]));
             await saveProgressForUser(key, learned);
           }
+
           await bootstrap();
           alert('가져오기가 완료되었습니다.');
         }catch(e){
@@ -955,16 +1011,17 @@
         }
       }
 
-      if(exportBtn) exportBtn.addEventListener('click', exportAll);
-      if(importBtn && importFile){
+      if(exportBtn && !exportBtn.__bound){ exportBtn.addEventListener('click', exportAll); exportBtn.__bound=true; }
+      if(importBtn && importFile && !importBtn.__bound){
         importBtn.addEventListener('click', ()=> importFile.click());
         importFile.addEventListener('change', (e)=>{
           const f = e.target.files && e.target.files[0];
           if(f) importAll(f);
           e.target.value = '';
         });
+        importBtn.__bound=true;
       }
-    })();
+    });
 
     /* ================= 부트스트랩 ================= */
     async function bootstrap(){
